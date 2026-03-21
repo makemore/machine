@@ -1,0 +1,22 @@
+name: dev-box
+
+os: linux
+image: alpine
+packageManager: apk
+
+resources:
+  cpu: 2
+  memory: 2gb
+
+setup:
+  - install: git
+  - install: python3
+  - clone:
+      repo: https://github.com/octocat/Hello-World
+      dest: ~/hello-world
+
+run:
+  - cmd: echo "Hello from an Alpine Machine!"
+
+expose:
+  - 8080
