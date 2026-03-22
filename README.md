@@ -34,23 +34,35 @@ name: dev-box
 os: linux
 provider: hetzner        # local (default), hetzner, digitalocean, gcp
 region: eu-central       # mapped to provider-specific datacenters
+cloud_init: ./cloud-init.yaml  # raw user-data for cloud providers
+
+ssh_keys:                # multi-user SSH access
+  - username: chris
+    public_key: "ssh-ed25519 AAAA..."
+  - username: alice
+    public_key: "ssh-ed25519 AAAA..."
+
+env:                     # injected into /etc/environment
+  API_KEY: "sk-..."
+  NODE_ENV: "production"
 
 resources:
   cpu: 4
   memory: 8gb
 
 setup:
-  - install: git
-  - install: curl
-  - install: build-essential
+  - install: git curl build-essential
+  - script: ./scripts/startup.sh   # copy & run a local script on the VM
   - clone:
       repo: https://github.com/your-org/your-repo
       dest: ~/project
-
-run:
   - cmd: cd ~/project && make build
 
-expose:
+run:
+  - cmd: cd ~/project && make serve
+
+expose:                  # creates firewall rules on Hetzner/DO
+  - 3000
   - 8080
 ```
 
@@ -67,6 +79,23 @@ expose:
 | `mach doctor` | Check that all dependencies are installed |
 
 All commands accept `-f <file>` to specify a Machinefile (defaults to `Machinefile`).
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `--json` | Machine-readable JSON output (IP, status, provider) |
+| `--state-file <path>` | Custom state file path for CI/CD (default: `~/.config/machine/state/<name>.json`) |
+
+### JSON output
+
+```bash
+$ mach -f Machinefile.hetzner up --json
+{"name":"dev","ip":"1.2.3.4","status":"running","provider":"hetzner","region":"fsn1-dc14","cpus":4,"memory_mb":8192}
+
+$ mach list --json
+[{"name":"dev","status":"running","os":"hetzner","cpus":"4","memory":"8 GB"}]
+```
 
 ## Providers
 
