@@ -137,40 +137,66 @@ EOF</span>
 <span class="cmd">mach -f Machinefile.hetzner up</span></pre>
 
   <h2>Full Machinefile spec</h2>
-  <pre><span class="cmd">name: my-vm
+  <pre><span class="cmd">name: my-app
 os: linux
 provider: hetzner          <span class="comment"># local, hetzner, digitalocean, gcp</span>
 region: eu-central         <span class="comment"># friendly names mapped to provider slugs</span>
-cloud_init: ./cloud-init.yaml  <span class="comment"># raw user-data for cloud providers</span>
+harden: true               <span class="comment"># SSH lockdown, fail2ban, UFW, auto-upgrades</span>
+swap: 4gb                  <span class="comment"># provision swap space</span>
 
-ssh_keys:                  <span class="comment"># multi-user SSH access</span>
-  - username: chris
+motd: |                    <span class="comment"># message of the day with template vars</span>
+  Welcome to {{.Name}} ({{.IP}})
+
+users:                     <span class="comment"># full user accounts</span>
+  - username: deploy
     public_key: "ssh-ed25519 AAAA..."
+    sudo: true
+    github_pat: "ghp_..."
   - username: alice
     public_key: "ssh-ed25519 AAAA..."
 
 env:                       <span class="comment"># injected into /etc/environment</span>
-  API_KEY: "sk-..."
-  NODE_ENV: "production"
+  NODE_ENV: production
+  POSTGRES_USER: appuser
+  POSTGRES_DB: appdb
 
 resources:
   cpu: 4
   memory: 8gb
 
 setup:
-  - install: docker.io git curl
-  - script: ./scripts/startup.sh  <span class="comment"># copy &amp; run a local script</span>
+  - install: docker        <span class="comment"># first-class: get.docker.com + docker group</span>
+  - install: nodejs-22     <span class="comment"># first-class: NodeSource + version pinning</span>
+  - install: postgres      <span class="comment"># first-class: apt + auto user/db creation</span>
+  - install: git curl      <span class="comment"># standard apt packages</span>
+  - script: ./startup.sh   <span class="comment"># SCP + execute a local script</span>
   - clone:
       repo: https://github.com/org/repo
       dest: ~/app
-  - cmd: cd ~/app && make build
+      branch: main         <span class="comment"># specific branch</span>
+      pat_env: GITHUB_TOKEN <span class="comment"># private repo auth</span>
+  - cmd: cd ~/app &amp;&amp; make build
 
-run:
-  - cmd: cd ~/app && make serve
+services:                  <span class="comment"># systemd units, auto-generated</span>
+  - name: myapp
+    cmd: /usr/local/bin/myapp serve
+    workdir: /opt/app
+    user: deploy
+    restart: always
+    env:
+      PORT: "8000"
+
+reverse_proxy:             <span class="comment"># Caddy auto-config + TLS</span>
+  domain: myapp.example.com
+  routes:
+    - path: /
+      target: localhost:8000
+    - path: /api/*
+      target: localhost:3000
 
 expose:                    <span class="comment"># firewall rules on Hetzner/DO</span>
-  - 3000
-  - 8080</span></pre>
+  - 80
+  - 443</span></pre>
 
   <h2>Commands</h2>
   <table>
@@ -183,15 +209,15 @@ expose:                    <span class="comment"># firewall rules on Hetzner/DO<
     <tr><td><code>mach list</code></td><td>List all machines across all providers</td></tr>
     <tr><td><code>mach doctor</code></td><td>Check dependencies</td></tr>
   </table>
-  <p style="color: #8b949e; margin-top: 16px; margin-bottom: 60px;">All commands accept <code>-f &lt;file&gt;</code> for Machinefile path, <code>--json</code> for machine-readable output, and <code>--state-file</code> for CI/CD state persistence.</p>
+  <p style="color: #8b949e; margin-top: 16px; margin-bottom: 60px;">All commands accept <code>-f &lt;file&gt;</code>, <code>--json</code>, and <code>--state-file</code>.</p>
 
   <h2>JSON output</h2>
-  <p style="color: #8b949e; margin-bottom: 16px;">Use <code>--json</code> for CI/CD integration. Every command returns structured data:</p>
+  <p style="color: #8b949e; margin-bottom: 16px;">Use <code>--json</code> for CI/CD integration:</p>
   <pre><span class="cmd">$ mach -f Machinefile.hetzner up --json</span>
-<span class="comment">{"name":"dev","ip":"1.2.3.4","status":"running","provider":"hetzner","region":"fsn1-dc14","cpus":4,"memory_mb":8192,"disk_gb":80,"os":"linux","type":"cax21"}</span>
+<span class="comment">{"name":"dev","ip":"1.2.3.4","status":"running","provider":"hetzner","cpus":4,"memory_mb":8192,"type":"cax21"}</span>
 
 <span class="cmd">$ mach list --json</span>
-<span class="comment">[{"name":"dev","status":"running","os":"hetzner","cpus":"4","memory":"8 GB"},{"name":"mac-dev","status":"stopped","os":"macos"}]</span></pre>
+<span class="comment">[{"name":"dev","status":"running","os":"hetzner","cpus":"4","memory":"8 GB"}]</span></pre>
 
   <div class="providers" style="margin-top: 60px;">
   <h2>Providers</h2>
@@ -209,53 +235,83 @@ expose:                    <span class="comment"># firewall rules on Hetzner/DO<
   <h2>Features</h2>
   <div class="grid">
     <div class="card">
+      <span class="emoji">🐳</span>
+      <h3>First-class Docker</h3>
+      <p><code>install: docker</code> — get.docker.com, adds users to docker group, systemd enabled.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">🐘</span>
+      <h3>First-class Postgres</h3>
+      <p><code>install: postgres</code> — creates user/db from <code>POSTGRES_USER</code>/<code>POSTGRES_DB</code> env vars.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">📦</span>
+      <h3>First-class Node.js</h3>
+      <p><code>install: nodejs-22</code> — NodeSource repo, version pinning, LTS by default.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">🔒</span>
+      <h3>Security hardening</h3>
+      <p><code>harden: true</code> — SSH lockdown, fail2ban, UFW firewall, unattended security upgrades.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">👤</span>
+      <h3>User accounts</h3>
+      <p><code>users:</code> — SSH keys, passwordless sudo, Docker group, git credentials, custom shell.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">⚙️</span>
+      <h3>Systemd services</h3>
+      <p><code>services:</code> — generates unit files, auto-restart, env vars, optional binary download.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">🌐</span>
+      <h3>Reverse proxy</h3>
+      <p><code>reverse_proxy:</code> — Caddy auto-config, path routing, auto-TLS with your domain.</p>
+    </div>
+    <div class="card">
       <span class="emoji">🔑</span>
-      <h3>Multi-user SSH</h3>
-      <p><code>ssh_keys:</code> with username + public_key pairs. Keys auto-uploaded to cloud providers.</p>
+      <h3>Private repo cloning</h3>
+      <p><code>pat_env:</code> + <code>branch:</code> — clone private repos with PAT auth, specific branches.</p>
+    </div>
+    <div class="card">
+      <span class="emoji">💾</span>
+      <h3>Swap, MOTD, env, scripts</h3>
+      <p>Swap files, custom MOTD with template vars, /etc/environment, SCP+execute scripts.</p>
     </div>
     <div class="card">
       <span class="emoji">🔥</span>
       <h3>Firewall rules</h3>
-      <p><code>expose:</code> ports automatically create firewall rules on Hetzner and DigitalOcean.</p>
-    </div>
-    <div class="card">
-      <span class="emoji">📜</span>
-      <h3>Scripts &amp; cloud-init</h3>
-      <p><code>- script: ./startup.sh</code> copies and runs local scripts. <code>cloud_init:</code> for raw user-data.</p>
-    </div>
-    <div class="card">
-      <span class="emoji">🔧</span>
-      <h3>Environment variables</h3>
-      <p><code>env:</code> block injects vars into <code>/etc/environment</code> — API keys, config, secrets.</p>
+      <p><code>expose:</code> — auto-creates firewall on Hetzner/DO. SSH always allowed.</p>
     </div>
     <div class="card">
       <span class="emoji">📋</span>
-      <h3>JSON output</h3>
-      <p><code>--json</code> flag on all commands for CI/CD pipelines. Returns IP, status, provider.</p>
+      <h3>JSON + state file</h3>
+      <p><code>--json</code> for CI/CD pipelines. <code>--state-file</code> for idempotent cloud builds.</p>
     </div>
     <div class="card">
-      <span class="emoji">💾</span>
-      <h3>State file</h3>
-      <p>Persists machine info for idempotent CI runs. <code>--state-file</code> for custom paths.</p>
+      <span class="emoji">☁️</span>
+      <h3>Cloud-init</h3>
+      <p><code>cloud_init:</code> — pass raw user-data to Hetzner/DO at create time.</p>
     </div>
   </div>
 
   <div class="downloads">
-  <h2>Download</h2>
+  <h2>Download v0.2.0</h2>
   <div class="dl-grid">
-    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.1.0/mach-darwin-arm64">
+    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.2.0/mach-darwin-arm64">
       <span class="os">🍎 macOS</span>
       <span class="arch">Apple Silicon (arm64)</span>
     </a>
-    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.1.0/mach-darwin-amd64">
+    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.2.0/mach-darwin-amd64">
       <span class="os">🍎 macOS</span>
       <span class="arch">Intel (amd64)</span>
     </a>
-    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.1.0/mach-linux-arm64">
+    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.2.0/mach-linux-arm64">
       <span class="os">🐧 Linux</span>
       <span class="arch">ARM (arm64)</span>
     </a>
-    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.1.0/mach-linux-amd64">
+    <a class="dl-btn" href="https://github.com/makemore/machine/releases/download/v0.2.0/mach-linux-amd64">
       <span class="os">🐧 Linux</span>
       <span class="arch">x86_64 (amd64)</span>
     </a>
