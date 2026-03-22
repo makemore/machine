@@ -143,19 +143,40 @@ func (h *HetznerAdapter) uploadSSHKey(keyName, pubKey string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if status != 201 {
-		return 0, fmt.Errorf("creating SSH key '%s': HTTP %d: %s", keyName, status, string(createResp))
+	if status == 201 {
+		var createResult struct {
+			SSHKey struct {
+				ID int64 `json:"id"`
+			} `json:"ssh_key"`
+		}
+		if err := json.Unmarshal(createResp, &createResult); err != nil {
+			return 0, err
+		}
+		return createResult.SSHKey.ID, nil
 	}
 
-	var createResult struct {
-		SSHKey struct {
-			ID int64 `json:"id"`
-		} `json:"ssh_key"`
+	// 409 = key already exists under a different name — find it by fingerprint
+	if status == 409 {
+		listResp, _, err := h.hetznerRequest("GET", "/ssh_keys?per_page=50", nil)
+		if err != nil {
+			return 0, err
+		}
+		var listResult struct {
+			SSHKeys []struct {
+				ID        int64  `json:"id"`
+				PublicKey string `json:"public_key"`
+			} `json:"ssh_keys"`
+		}
+		if json.Unmarshal(listResp, &listResult) == nil {
+			for _, k := range listResult.SSHKeys {
+				if strings.TrimSpace(k.PublicKey) == strings.TrimSpace(pubKey) {
+					return k.ID, nil
+				}
+			}
+		}
 	}
-	if err := json.Unmarshal(createResp, &createResult); err != nil {
-		return 0, err
-	}
-	return createResult.SSHKey.ID, nil
+
+	return 0, fmt.Errorf("creating SSH key '%s': HTTP %d: %s", keyName, status, string(createResp))
 }
 
 // getSSHKeyIDs uploads all SSH keys and returns their IDs

@@ -1,0 +1,58 @@
+name: mach-test
+
+os: linux
+provider: hetzner
+region: eu-central
+harden: true
+swap: 2gb
+
+motd: |
+  ╔══════════════════════════════════════╗
+  ║  {{.Name}} — powered by mach        ║
+  ║  Provider: {{.Provider}}             ║
+  ║  IP: {{.IP}}                         ║
+  ╚══════════════════════════════════════╝
+
+env:
+  NODE_ENV: production
+  POSTGRES_USER: appuser
+  POSTGRES_PASSWORD: s3cret
+  POSTGRES_DB: appdb
+
+users:
+  - username: deploy
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest deploy@mach"
+    sudo: true
+
+resources:
+  cpu: 2
+  memory: 4gb
+
+setup:
+  - install: git
+  - install: curl
+  - install: docker
+  - install: nodejs-22
+  - install: postgres
+  - clone:
+      repo: https://github.com/octocat/Hello-World
+      dest: /opt/project
+      branch: master
+
+services:
+  - name: hello
+    cmd: /usr/bin/python3 -m http.server 8000
+    workdir: /opt/project
+    user: root
+    restart: always
+
+reverse_proxy:
+  routes:
+    - path: /
+      target: localhost:8000
+
+expose:
+  - 80
+  - 443
+  - 8000
+

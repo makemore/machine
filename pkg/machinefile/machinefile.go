@@ -9,19 +9,25 @@ import (
 
 // Machinefile represents the parsed Machinefile
 type Machinefile struct {
-	Name           string    `yaml:"name"`
-	OS             string    `yaml:"os"`
-	Image          string    `yaml:"image,omitempty"`
-	PackageManager string    `yaml:"packageManager,omitempty"`
-	Provider       string    `yaml:"provider,omitempty"`       // local (default), hetzner, digitalocean, gcp
-	Region         string    `yaml:"region,omitempty"`         // cloud region/datacenter
-	SSHKey         string            `yaml:"sshKey,omitempty"`         // path to SSH public key for cloud VMs
-	SSHKeys        []SSHKeySpec      `yaml:"ssh_keys,omitempty"`       // multiple SSH keys with usernames
-	CloudInit      string            `yaml:"cloud_init,omitempty"`     // path to cloud-init/user-data file
-	Env            map[string]string `yaml:"env,omitempty"`            // environment variables to inject
+	Name           string            `yaml:"name"`
+	OS             string            `yaml:"os"`
+	Image          string            `yaml:"image,omitempty"`
+	PackageManager string            `yaml:"packageManager,omitempty"`
+	Provider       string            `yaml:"provider,omitempty"`
+	Region         string            `yaml:"region,omitempty"`
+	Harden         bool              `yaml:"harden,omitempty"`
+	Swap           string            `yaml:"swap,omitempty"`
+	MOTD           string            `yaml:"motd,omitempty"`
+	SSHKey         string            `yaml:"sshKey,omitempty"`
+	SSHKeys        []SSHKeySpec      `yaml:"ssh_keys,omitempty"`
+	Users          []UserSpec        `yaml:"users,omitempty"`
+	CloudInit      string            `yaml:"cloud_init,omitempty"`
+	Env            map[string]string `yaml:"env,omitempty"`
 	Resources      Resources         `yaml:"resources"`
 	Setup          []Step            `yaml:"setup"`
 	Run            []Step            `yaml:"run"`
+	Services       []ServiceSpec     `yaml:"services,omitempty"`
+	ReverseProxy   *ReverseProxy     `yaml:"reverse_proxy,omitempty"`
 	Expose         []int             `yaml:"expose"`
 }
 
@@ -29,6 +35,7 @@ type Machinefile struct {
 type Resources struct {
 	CPU    int    `yaml:"cpu"`
 	Memory string `yaml:"memory"`
+	Disk   string `yaml:"disk,omitempty"`
 }
 
 // SSHKeySpec represents an SSH key for multi-user VMs
@@ -37,19 +44,52 @@ type SSHKeySpec struct {
 	PublicKey string `yaml:"public_key"`
 }
 
+// UserSpec represents a full user account
+type UserSpec struct {
+	Username  string `yaml:"username"`
+	PublicKey string `yaml:"public_key"`
+	GithubPAT string `yaml:"github_pat,omitempty"`
+	Sudo      *bool  `yaml:"sudo,omitempty"`
+	Shell     string `yaml:"shell,omitempty"`
+}
+
+// ServiceSpec represents a systemd service
+type ServiceSpec struct {
+	Name    string            `yaml:"name"`
+	Cmd     string            `yaml:"cmd"`
+	Install string            `yaml:"install,omitempty"`
+	Workdir string            `yaml:"workdir,omitempty"`
+	User    string            `yaml:"user,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Restart string            `yaml:"restart,omitempty"`
+}
+
+// ReverseProxy configures Caddy
+type ReverseProxy struct {
+	Domain string       `yaml:"domain,omitempty"`
+	Routes []ProxyRoute `yaml:"routes"`
+}
+
+// ProxyRoute is a single reverse proxy route
+type ProxyRoute struct {
+	Path   string `yaml:"path"`
+	Target string `yaml:"target"`
+}
+
 // Step represents a setup or run step
-// Can be: install, clone, cmd, or script
 type Step struct {
-	Install string      `yaml:"install,omitempty"`
-	Clone   *CloneSpec  `yaml:"clone,omitempty"`
-	Cmd     string      `yaml:"cmd,omitempty"`
-	Script  string      `yaml:"script,omitempty"`   // path to a local script to run on VM
+	Install string     `yaml:"install,omitempty"`
+	Clone   *CloneSpec `yaml:"clone,omitempty"`
+	Cmd     string     `yaml:"cmd,omitempty"`
+	Script  string     `yaml:"script,omitempty"`
 }
 
 // CloneSpec represents git clone parameters
 type CloneSpec struct {
-	Repo string `yaml:"repo"`
-	Dest string `yaml:"dest"`
+	Repo   string `yaml:"repo"`
+	Dest   string `yaml:"dest"`
+	Branch string `yaml:"branch,omitempty"`
+	PATEnv string `yaml:"pat_env,omitempty"`
 }
 
 // Load parses a Machinefile from the given path
