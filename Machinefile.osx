@@ -1,22 +1,25 @@
-name: dev-box
+name: mac-dev
 
-os: linux
-image: alpine
-packageManager: apk
+os: macos
+image: ghcr.io/cirruslabs/macos-sequoia-base:latest
+packageManager: brew
 
 resources:
-  cpu: 2
-  memory: 2gb
+  cpu: 4
+  memory: 8gb
 
 setup:
   - install: git
   - install: python3
+  - install: node
   - clone:
       repo: https://github.com/octocat/Hello-World
       dest: ~/hello-world
 
 run:
-  - cmd: echo "Hello from an Alpine Machine!"
+  - cmd: python3 --version
+  - cmd: node --version
+  - cmd: echo "macOS dev environment ready!"
 
 expose:
   - 8080

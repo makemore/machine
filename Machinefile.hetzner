@@ -1,0 +1,25 @@
+name: hetzner-dev
+
+os: linux
+provider: hetzner
+region: eu-central
+
+resources:
+  cpu: 4
+  memory: 8gb
+
+setup:
+  - install: git
+  - install: curl
+  - install: build-essential
+  - clone:
+      repo: https://github.com/octocat/Hello-World
+      dest: /root/hello-world
+
+run:
+  - cmd: uname -a
+  - cmd: cat /etc/os-release
+
+expose:
+  - 8080
+

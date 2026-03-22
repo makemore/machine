@@ -1,22 +1,24 @@
-name: dev-box
+name: win-dev
 
-os: linux
-image: alpine
-packageManager: apk
+os: windows
+packageManager: choco
 
 resources:
-  cpu: 2
-  memory: 2gb
+  cpu: 4
+  memory: 8gb
 
 setup:
   - install: git
-  - install: python3
+  - install: python
+  - install: nodejs
   - clone:
       repo: https://github.com/octocat/Hello-World
-      dest: ~/hello-world
+      dest: C:\Users\User\hello-world
 
 run:
-  - cmd: echo "Hello from an Alpine Machine!"
+  - cmd: python --version
+  - cmd: node --version
 
 expose:
+  - 3389
   - 8080

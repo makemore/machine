@@ -1,0 +1,23 @@
+name: python-dev
+
+os: linux
+
+resources:
+  cpu: 4
+  memory: 4gb
+
+setup:
+  - install: python3
+  - install: python3-pip
+  - install: git
+  - clone:
+      repo: https://github.com/octocat/Hello-World
+      dest: /home/lima.linux/hello-world
+
+run:
+  - cmd: python3 --version
+  - cmd: pip3 --version
+
+expose:
+  - 8000
+

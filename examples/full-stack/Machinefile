@@ -1,0 +1,28 @@
+name: full-stack
+
+os: linux
+
+resources:
+  cpu: 4
+  memory: 8gb
+
+setup:
+  - install: git
+  - install: nodejs
+  - install: npm
+  - install: python3
+  - install: python3-pip
+  - install: postgresql
+  - install: redis-server
+
+run:
+  - cmd: echo "Full stack environment ready!"
+  - cmd: node --version
+  - cmd: python3 --version
+  - cmd: psql --version
+
+expose:
+  - 3000
+  - 5432
+  - 6379
+

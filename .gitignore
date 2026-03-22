@@ -1,0 +1,19 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Build output
+mach
+/mach
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+name: gcp-dev
+
+os: linux
+provider: gcp
+region: eu-west
+
+resources:
+  cpu: 2
+  memory: 8gb
+
+setup:
+  - install: git
+  - install: curl
+  - clone:
+      repo: https://github.com/octocat/Hello-World
+      dest: ~/hello-world
+
+run:
+  - cmd: uname -a
+  - cmd: cat /etc/os-release
+
+expose:
+  - 8080
+

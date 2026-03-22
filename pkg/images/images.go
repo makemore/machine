@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,22 +42,24 @@ func LoadManifest() (*ImageManifest, error) {
 	manifestPath := filepath.Join(configPath, "images.yaml")
 
 	var data []byte
-	if _, err := os.Stat(manifestPath); err == nil {
+	if _, statErr := os.Stat(manifestPath); statErr == nil {
 		// User manifest exists, load it
-		data, err = os.ReadFile(manifestPath)
-		if err != nil {
-			return nil, fmt.Errorf("reading user manifest: %w", err)
+		var readErr error
+		data, readErr = os.ReadFile(manifestPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("reading user manifest: %w", readErr)
 		}
 	} else {
 		// Fallback to embedded manifest
-		file, err := embeddedData.Open("data/images.yaml")
-		if err != nil {
-			return nil, fmt.Errorf("opening embedded manifest: %w", err)
+		file, openErr := embeddedData.Open("data/images.yaml")
+		if openErr != nil {
+			return nil, fmt.Errorf("opening embedded manifest: %w", openErr)
 		}
 		defer file.Close()
-		data, err = io.ReadAll(file)
-		if err != nil {
-			return nil, fmt.Errorf("reading embedded manifest: %w", err)
+		var readErr error
+		data, readErr = io.ReadAll(file)
+		if readErr != nil {
+			return nil, fmt.Errorf("reading embedded manifest: %w", readErr)
 		}
 	}
 
@@ -116,7 +119,7 @@ func (m *ImageManifest) ResolveImage(name string) (string, error) {
 	arch := runtime.GOARCH
 	var url string
 	switch arch {
-	case "x86_64":
+	case "amd64":
 		url = set.X86_64.URL
 	case "arm64":
 		url = set.Arm64.URL
@@ -129,6 +132,26 @@ func (m *ImageManifest) ResolveImage(name string) (string, error) {
 	}
 
 	return url, nil
+}
+
+// ResolveImageBothArch returns the x86_64 and arm64 URLs for a given image name.
+func (m *ImageManifest) ResolveImageBothArch(name string) (x86URL string, armURL string, err error) {
+	set, ok := m.Images[name]
+	if !ok {
+		if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
+			return name, name, nil
+		}
+		return "", "", fmt.Errorf("image '%s' not found in manifest", name)
+	}
+
+	x86URL = set.X86_64.URL
+	armURL = set.Arm64.URL
+
+	if x86URL == "" && armURL == "" {
+		return "", "", fmt.Errorf("no URLs found for image '%s'", name)
+	}
+
+	return x86URL, armURL, nil
 }
 
 // GetConfigPath returns the path to the user's config directory.

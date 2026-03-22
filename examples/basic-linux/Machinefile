@@ -1,0 +1,15 @@
+name: basic-linux
+
+os: linux
+
+resources:
+  cpu: 2
+  memory: 2gb
+
+setup:
+  - install: git
+  - install: curl
+
+run:
+  - cmd: echo "Basic Linux machine ready!"
+
