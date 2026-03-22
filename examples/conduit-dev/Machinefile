@@ -1,0 +1,62 @@
+name: conduit-dev
+
+os: linux
+provider: hetzner
+region: eu-central
+harden: true
+swap: 4gb
+
+resources:
+  cpu: 4
+  memory: 8gb
+  disk: 50gb
+
+users:
+  - username: dev
+    public_key: "ssh-ed25519 REPLACE_ME"
+    sudo: true
+
+env:
+  ANTHROPIC_API_KEY: "sk-ant-REPLACE_ME"
+
+setup:
+  - install: git curl wget unzip jq build-essential tmux htop python3 python3-dev
+  - install: docker
+  - install: postgres
+  - install: nodejs-22
+  - cmd: npm install -g @anthropic-ai/claude-code
+  - clone:
+      repo: https://github.com/org/my-project
+      dest: /opt/project
+      branch: main
+      pat_env: GITHUB_PAT
+
+services:
+  - name: conduitd
+    install: https://downloads.myconduit.io/agent/latest/conduitd-linux-amd64
+    cmd: /usr/local/bin/conduitd run
+    workdir: /opt/project
+    env:
+      CONDUIT_DEVICE_ID: "REPLACE_ME"
+      CONDUIT_GATEWAY_URL: "wss://gateway.myconduit.io"
+    restart: always
+
+reverse_proxy:
+  routes:
+    - path: /api/*
+      target: localhost:8000
+    - path: /
+      target: localhost:3000
+
+expose:
+  - 3000
+  - 8000
+  - 8080
+
+motd: |
+  ════════════════════════════════════════
+    Conduit Dev Environment: {{.Name}}
+  ════════════════════════════════════════
+    START CODING:    code
+    PROJECT DIR:     /opt/project
+  ════════════════════════════════════════

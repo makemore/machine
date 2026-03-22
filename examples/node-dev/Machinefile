@@ -1,20 +1,20 @@
 name: node-dev
 
 os: linux
+provider: lima
+swap: 2gb
 
 resources:
   cpu: 2
   memory: 4gb
 
 setup:
-  - install: git
-  - install: nodejs
-  - install: npm
-
-run:
-  - cmd: node --version
-  - cmd: npm --version
+  - install: git curl
+  - install: nodejs-22
+  - cmd: npm install -g typescript
 
 expose:
   - 3000
 
+motd: |
+  Node.js Dev Environment: {{.Name}}

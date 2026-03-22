@@ -262,22 +262,39 @@ GCP uses `gcloud auth login`. `.env` is loaded automatically.
 ## Architecture
 
 ```
-Machinefile → mach up → Adapter → VM/Server
+Machinefile → mach up → Adapter → CommandRunner → VM/Server
+                         │              │
+                         │              ├── SSHRunner   (cloud VMs)
+                         │              └── LimaRunner  (local Linux)
                          │
-                         ├── LimaAdapter        (local Linux)
-                         ├── TartAdapter         (local macOS)
-                         ├── QemuAdapter         (local Windows)
-                         ├── HetznerAdapter      (Hetzner Cloud API)
-                         ├── DigitalOceanAdapter  (DO API)
-                         └── GCPAdapter          (gcloud CLI)
+                         ├── LimaAdapter         (local Linux)
+                         ├── TartAdapter          (local macOS)
+                         ├── QemuAdapter          (local Windows)
+                         ├── HetznerAdapter       (Hetzner Cloud API)
+                         ├── DigitalOceanAdapter   (DO API)
+                         └── GCPAdapter           (gcloud CLI)
                          │
-                         └── provisionCloud()
+                         └── provisionAll(runner)
                               ├── env vars → /etc/environment
                               ├── users → accounts, SSH, sudo, git creds
                               ├── swap → swapfile
                               ├── harden → SSH, fail2ban, UFW, upgrades
-                              ├── setup → install, clone, cmd, script
+                              ├── setup → install (docker/postgres/nodejs), clone, cmd, script
                               ├── services → systemd units
                               ├── reverse_proxy → Caddy + Caddyfile
                               └── motd → /etc/motd
 ```
+
+The `CommandRunner` interface lets the same provisioning pipeline work across SSH (cloud) and `limactl shell` (local), and enables unit testing via a mock runner.
+
+## Testing
+
+```bash
+go test ./...
+```
+
+51 unit tests covering Machinefile parsing, state management, and the full provisioning pipeline (using a mock runner that records commands without executing them).
+
+## Examples
+
+See [`examples/`](examples/) for ready-to-use Machinefiles including a full [Conduit dev environment](examples/conduit-dev/Machinefile).

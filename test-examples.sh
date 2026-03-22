@@ -17,6 +17,7 @@ EXAMPLES=(
   "python-dev"
   "node-dev"
   "full-stack"
+  "conduit-dev"
 )
 
 for example in "${EXAMPLES[@]}"; do
@@ -41,4 +42,3 @@ for example in "${EXAMPLES[@]}"; do
 done
 
 echo "✅ All examples tested successfully!"
-

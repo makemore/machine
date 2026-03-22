@@ -113,29 +113,11 @@ func (l *LimaAdapter) getInstallCommand(pm, pkg string) string {
 
 // Provision runs setup steps inside the VM
 func (l *LimaAdapter) Provision(mf *machinefile.Machinefile) error {
-	for _, step := range mf.Setup {
-		if step.Install != "" {
-			fmt.Printf("   📦 Installing %s...\n", step.Install)
-			cmd := l.getInstallCommand(mf.PackageManager, step.Install)
-			if err := l.execInVM(mf.Name, cmd); err != nil {
-				return fmt.Errorf("installing %s: %w", step.Install, err)
-			}
-		}
-		if step.Clone != nil {
-			fmt.Printf("   📥 Cloning %s...\n", step.Clone.Repo)
-			cmd := fmt.Sprintf("git clone %s %s", step.Clone.Repo, step.Clone.Dest)
-			if err := l.execInVM(mf.Name, cmd); err != nil {
-				return fmt.Errorf("cloning %s: %w", step.Clone.Repo, err)
-			}
-		}
-		if step.Cmd != "" {
-			fmt.Printf("   ▶️  Running: %s\n", step.Cmd)
-			if err := l.execInVM(mf.Name, step.Cmd); err != nil {
-				return fmt.Errorf("running cmd: %w", err)
-			}
-		}
-	}
-	return nil
+	// Use the shared provisioning pipeline via LimaRunner
+	// This handles all v0.2.0 features: harden, swap, users, services,
+	// reverse_proxy, first-class installs (docker, postgres, nodejs), etc.
+	run := &LimaRunner{Name: mf.Name}
+	return provisionAll(mf, run, "127.0.0.1", true)
 }
 
 // Run executes run commands

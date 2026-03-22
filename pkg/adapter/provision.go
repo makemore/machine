@@ -3,28 +3,19 @@ package adapter
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/makemore/machine/pkg/machinefile"
 )
 
-// sshExec runs a command on a remote host via SSH
+// sshExec is kept for backward compat — wraps SSHRunner
 func sshExec(user, ip, command string) error {
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		fmt.Sprintf("%s@%s", user, ip), command)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return (&SSHRunner{User: user, IP: ip}).Exec(command)
 }
 
-// scpFile copies a local file to a remote host
+// scpFile is kept for backward compat — wraps SSHRunner
 func scpFile(user, ip, localPath, remotePath string) error {
-	cmd := exec.Command("scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		localPath, fmt.Sprintf("%s@%s:%s", user, ip, remotePath))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return (&SSHRunner{User: user, IP: ip}).CopyFile(localPath, remotePath)
 }
 
 // waitForApt returns a command prefix that waits for apt locks
@@ -38,50 +29,48 @@ func aptInstall(sudo, packages string) string {
 		waitForApt(sudo), sudo, sudo, packages)
 }
 
-// provisionCloud runs the full provisioning pipeline on a cloud VM
+// provisionCloud runs the full provisioning pipeline on a cloud VM via SSH
 func provisionCloud(mf *machinefile.Machinefile, user, ip string, useSudo bool) error {
+	run := &SSHRunner{User: user, IP: ip}
+	return provisionAll(mf, run, ip, useSudo)
+}
+
+// provisionAll runs the full provisioning pipeline using the given runner
+func provisionAll(mf *machinefile.Machinefile, run CommandRunner, ip string, useSudo bool) error {
 	sudo := ""
 	if useSudo {
 		sudo = "sudo "
 	}
 
-	// 1. Env vars
-	if err := provisionEnv(mf, user, ip, sudo); err != nil {
+	if err := provisionEnv(mf, run, sudo); err != nil {
 		return err
 	}
-	// 2. Users
-	if err := provisionUsers(mf, user, ip, sudo); err != nil {
+	if err := provisionUsers(mf, run, sudo); err != nil {
 		return err
 	}
-	// 3. Swap
-	if err := provisionSwap(mf, user, ip, sudo); err != nil {
+	if err := provisionSwap(mf, run, sudo); err != nil {
 		return err
 	}
-	// 4. Harden
-	if err := provisionHarden(mf, user, ip, sudo); err != nil {
+	if err := provisionHarden(mf, run, sudo); err != nil {
 		return err
 	}
-	// 5. Setup steps (install, clone, cmd, script)
-	if err := provisionSetup(mf, user, ip, sudo); err != nil {
+	if err := provisionSetup(mf, run, sudo); err != nil {
 		return err
 	}
-	// 6. Services
-	if err := provisionServices(mf, user, ip, sudo); err != nil {
+	if err := provisionServices(mf, run, sudo); err != nil {
 		return err
 	}
-	// 7. Reverse proxy
-	if err := provisionReverseProxy(mf, user, ip, sudo); err != nil {
+	if err := provisionReverseProxy(mf, run, sudo); err != nil {
 		return err
 	}
-	// 8. MOTD
-	if err := provisionMOTD(mf, user, ip, sudo); err != nil {
+	if err := provisionMOTD(mf, run, ip, sudo); err != nil {
 		return err
 	}
 	return nil
 }
 
 // provisionEnv injects environment variables
-func provisionEnv(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionEnv(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if len(mf.Env) == 0 {
 		return nil
 	}
@@ -95,12 +84,11 @@ func provisionEnv(mf *machinefile.Machinefile, user, ip, sudo string) error {
 	if sudo != "" {
 		cmd = sudo + "bash -c '" + strings.ReplaceAll(cmd, "'", "'\\''") + "'"
 	}
-	return sshExec(user, ip, cmd)
+	return run.Exec(cmd)
 }
 
-
 // provisionUsers creates user accounts with SSH, sudo, git credentials
-func provisionUsers(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionUsers(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if len(mf.Users) == 0 {
 		return nil
 	}
@@ -110,29 +98,24 @@ func provisionUsers(mf *machinefile.Machinefile, user, ip, sudo string) error {
 		if shell == "" {
 			shell = "/bin/bash"
 		}
-		sudoEnabled := u.Sudo == nil || *u.Sudo // default true
+		sudoEnabled := u.Sudo == nil || *u.Sudo
 
 		var cmds []string
-		// Create user
 		cmds = append(cmds, fmt.Sprintf("id -u %s >/dev/null 2>&1 || %suseradd -m -s %s %s", u.Username, sudo, shell, u.Username))
-		// Sudo
 		if sudoEnabled {
 			cmds = append(cmds, fmt.Sprintf("%susermod -aG sudo %s", sudo, u.Username))
 			cmds = append(cmds, fmt.Sprintf("echo '%s ALL=(ALL) NOPASSWD:ALL' | %stee /etc/sudoers.d/%s > /dev/null", u.Username, sudo, u.Username))
 		}
-		// SSH key
 		cmds = append(cmds, fmt.Sprintf("%smkdir -p /home/%s/.ssh", sudo, u.Username))
 		cmds = append(cmds, fmt.Sprintf("echo '%s' | %stee /home/%s/.ssh/authorized_keys > /dev/null", u.PublicKey, sudo, u.Username))
 		cmds = append(cmds, fmt.Sprintf("%schmod 700 /home/%s/.ssh && %schmod 600 /home/%s/.ssh/authorized_keys", sudo, u.Username, sudo, u.Username))
-		// Git credentials
 		if u.GithubPAT != "" {
 			cmds = append(cmds, fmt.Sprintf("echo 'https://%s:%s@github.com' | %stee /home/%s/.git-credentials > /dev/null", u.Username, u.GithubPAT, sudo, u.Username))
 			cmds = append(cmds, fmt.Sprintf("%ssu - %s -c 'git config --global credential.helper store'", sudo, u.Username))
 		}
-		// Own home dir
 		cmds = append(cmds, fmt.Sprintf("%schown -R %s:%s /home/%s", sudo, u.Username, u.Username, u.Username))
 
-		if err := sshExec(user, ip, strings.Join(cmds, " && ")); err != nil {
+		if err := run.Exec(strings.Join(cmds, " && ")); err != nil {
 			return fmt.Errorf("creating user %s: %w", u.Username, err)
 		}
 		fmt.Printf("   ✅ User '%s' created\n", u.Username)
@@ -141,37 +124,34 @@ func provisionUsers(mf *machinefile.Machinefile, user, ip, sudo string) error {
 }
 
 // provisionSwap creates a swap file
-func provisionSwap(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionSwap(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if mf.Swap == "" {
 		return nil
 	}
 	fmt.Printf("   💾 Setting up %s swap...\n", mf.Swap)
 	size := strings.ToUpper(strings.TrimSpace(mf.Swap))
-	// Normalize: "4gb" -> "4G"
 	size = strings.ReplaceAll(size, "GB", "G")
 	size = strings.ReplaceAll(size, "MB", "M")
 
 	cmd := fmt.Sprintf(`if [ -f /swapfile ]; then echo 'Swap already exists'; else %sfallocate -l %s /swapfile && %schmod 600 /swapfile && %smkswap /swapfile && %sswapon /swapfile && echo '/swapfile none swap sw 0 0' | %stee -a /etc/fstab > /dev/null && %ssysctl vm.swappiness=10 && echo 'vm.swappiness=10' | %stee -a /etc/sysctl.conf > /dev/null && echo 'Swap created'; fi`,
 		sudo, size, sudo, sudo, sudo, sudo, sudo, sudo)
-	return sshExec(user, ip, cmd)
+	return run.Exec(cmd)
 }
 
 // provisionHarden locks down the VM
-func provisionHarden(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionHarden(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if !mf.Harden {
 		return nil
 	}
 	fmt.Printf("   🔒 Hardening VM...\n")
 
-	// SSH hardening
 	fmt.Printf("   🔒 SSH hardening...\n")
 	sshCmd := fmt.Sprintf(`%ssed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && %ssed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && %ssed -i 's/^#*MaxAuthTries.*/MaxAuthTries 3/' /etc/ssh/sshd_config && (%ssystemctl restart sshd 2>/dev/null || %ssystemctl restart ssh)`,
 		sudo, sudo, sudo, sudo, sudo)
-	if err := sshExec(user, ip, sshCmd); err != nil {
+	if err := run.Exec(sshCmd); err != nil {
 		return fmt.Errorf("SSH hardening: %w", err)
 	}
 
-	// fail2ban
 	fmt.Printf("   🔒 Installing fail2ban...\n")
 	f2bCmd := aptInstall(sudo, "fail2ban")
 	f2bCmd += fmt.Sprintf(` && echo '[sshd]
@@ -182,11 +162,10 @@ logpath = /var/log/auth.log
 maxretry = 3
 bantime = 86400
 findtime = 600' | %stee /etc/fail2ban/jail.local > /dev/null && %ssystemctl enable fail2ban && %ssystemctl restart fail2ban`, sudo, sudo, sudo)
-	if err := sshExec(user, ip, f2bCmd); err != nil {
+	if err := run.Exec(f2bCmd); err != nil {
 		return fmt.Errorf("fail2ban: %w", err)
 	}
 
-	// UFW
 	fmt.Printf("   🔒 Configuring UFW...\n")
 	ufwCmd := aptInstall(sudo, "ufw")
 	ufwCmd += fmt.Sprintf(" && %sufw default deny incoming && %sufw default allow outgoing && %sufw allow 22/tcp", sudo, sudo, sudo)
@@ -194,23 +173,21 @@ findtime = 600' | %stee /etc/fail2ban/jail.local > /dev/null && %ssystemctl enab
 		ufwCmd += fmt.Sprintf(" && %sufw allow %d/tcp", sudo, port)
 	}
 	ufwCmd += fmt.Sprintf(" && echo 'y' | %sufw enable", sudo)
-	if err := sshExec(user, ip, ufwCmd); err != nil {
+	if err := run.Exec(ufwCmd); err != nil {
 		return fmt.Errorf("UFW: %w", err)
 	}
 
-	// Unattended upgrades
 	fmt.Printf("   🔒 Enabling unattended upgrades...\n")
 	upgradeCmd := aptInstall(sudo, "unattended-upgrades")
 	upgradeCmd += fmt.Sprintf(` && echo 'APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";' | %stee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null`, sudo)
-	if err := sshExec(user, ip, upgradeCmd); err != nil {
+	if err := run.Exec(upgradeCmd); err != nil {
 		return fmt.Errorf("unattended upgrades: %w", err)
 	}
 
 	fmt.Printf("   ✅ VM hardened\n")
 	return nil
 }
-
 
 // collectUsernames returns all usernames from users: and ssh_keys:
 func collectUsernames(mf *machinefile.Machinefile) []string {
@@ -224,29 +201,26 @@ func collectUsernames(mf *machinefile.Machinefile) []string {
 	return names
 }
 
-// installDocker installs Docker via get.docker.com and adds users to docker group
-func installDocker(mf *machinefile.Machinefile, user, ip, sudo string) error {
+// installDocker installs Docker and adds users to docker group
+func installDocker(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	fmt.Printf("   🐳 Installing Docker...\n")
 	cmd := fmt.Sprintf("%scurl -fsSL https://get.docker.com | %sbash", sudo, sudo)
-	if err := sshExec(user, ip, cmd); err != nil {
+	if err := run.Exec(cmd); err != nil {
 		return fmt.Errorf("installing Docker: %w", err)
 	}
-	// Add users to docker group
 	for _, u := range collectUsernames(mf) {
-		sshExec(user, ip, fmt.Sprintf("%susermod -aG docker %s", sudo, u))
+		run.Exec(fmt.Sprintf("%susermod -aG docker %s", sudo, u))
 	}
-	sshExec(user, ip, fmt.Sprintf("%ssystemctl enable docker && %ssystemctl start docker", sudo, sudo))
+	run.Exec(fmt.Sprintf("%ssystemctl enable docker && %ssystemctl start docker", sudo, sudo))
 	return nil
 }
 
 // installPostgres installs PostgreSQL and creates a dev user/db
-func installPostgres(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func installPostgres(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	fmt.Printf("   🐘 Installing PostgreSQL...\n")
-	cmd := aptInstall(sudo, "postgresql postgresql-contrib libpq-dev")
-	if err := sshExec(user, ip, cmd); err != nil {
+	if err := run.Exec(aptInstall(sudo, "postgresql postgresql-contrib libpq-dev")); err != nil {
 		return fmt.Errorf("installing PostgreSQL: %w", err)
 	}
-	// Create dev user and database
 	pgUser := "devuser"
 	pgPass := "devpass"
 	pgDB := "devdb"
@@ -261,15 +235,14 @@ func installPostgres(mf *machinefile.Machinefile, user, ip, sudo string) error {
 	}
 	pgCmd := fmt.Sprintf(`%ssu - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='%s'\" | grep -q 1 || psql -c \"CREATE USER %s WITH PASSWORD '%s' CREATEDB;\"" && %ssu - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='%s'\" | grep -q 1 || psql -c \"CREATE DATABASE %s OWNER %s;\""`,
 		sudo, pgUser, pgUser, pgPass, sudo, pgDB, pgDB, pgUser)
-	if err := sshExec(user, ip, pgCmd); err != nil {
+	if err := run.Exec(pgCmd); err != nil {
 		fmt.Printf("   ⚠️  Postgres user/db setup failed (may already exist): %v\n", err)
 	}
 	return nil
 }
 
 // installNodeJS installs Node.js via NodeSource
-func installNodeJS(version string, user, ip, sudo string) error {
-	// Extract version number: "nodejs-22" -> "22", "nodejs" -> "lts"
+func installNodeJS(version string, run CommandRunner, sudo string) error {
 	ver := "lts"
 	if strings.Contains(version, "-") {
 		parts := strings.SplitN(version, "-", 2)
@@ -287,46 +260,46 @@ func installNodeJS(version string, user, ip, sudo string) error {
 		cmd = fmt.Sprintf("%scurl -fsSL https://deb.nodesource.com/setup_%s.x | %sbash - && %s",
 			sudo, ver, sudo, aptInstall(sudo, "nodejs"))
 	}
-	if err := sshExec(user, ip, cmd); err != nil {
+	if err := run.Exec(cmd); err != nil {
 		return fmt.Errorf("installing Node.js: %w", err)
 	}
-	sshExec(user, ip, "node --version")
+	run.Exec("node --version")
 	return nil
 }
 
 // provisionSetup runs setup steps with special install handling
-func provisionSetup(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionSetup(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	for _, step := range mf.Setup {
 		if step.Install != "" {
 			pkg := strings.TrimSpace(step.Install)
 			switch {
 			case pkg == "docker":
-				if err := installDocker(mf, user, ip, sudo); err != nil {
+				if err := installDocker(mf, run, sudo); err != nil {
 					return err
 				}
 			case pkg == "postgres" || pkg == "postgresql":
-				if err := installPostgres(mf, user, ip, sudo); err != nil {
+				if err := installPostgres(mf, run, sudo); err != nil {
 					return err
 				}
 			case pkg == "nodejs" || strings.HasPrefix(pkg, "nodejs-"):
-				if err := installNodeJS(pkg, user, ip, sudo); err != nil {
+				if err := installNodeJS(pkg, run, sudo); err != nil {
 					return err
 				}
 			default:
 				fmt.Printf("   📦 Installing %s...\n", pkg)
-				if err := sshExec(user, ip, aptInstall(sudo, pkg)); err != nil {
+				if err := run.Exec(aptInstall(sudo, pkg)); err != nil {
 					return fmt.Errorf("installing %s: %w", pkg, err)
 				}
 			}
 		}
 		if step.Clone != nil {
-			if err := cloneRepo(step.Clone, mf, user, ip); err != nil {
+			if err := cloneRepo(step.Clone, mf, run); err != nil {
 				return err
 			}
 		}
 		if step.Cmd != "" {
 			fmt.Printf("   ▶️  Running: %s\n", step.Cmd)
-			if err := sshExec(user, ip, step.Cmd); err != nil {
+			if err := run.Exec(step.Cmd); err != nil {
 				return fmt.Errorf("running cmd: %w", err)
 			}
 		}
@@ -336,11 +309,11 @@ func provisionSetup(mf *machinefile.Machinefile, user, ip, sudo string) error {
 				return fmt.Errorf("script file not found: %s", step.Script)
 			}
 			remotePath := fmt.Sprintf("/tmp/mach-script-%d.sh", os.Getpid())
-			if err := scpFile(user, ip, step.Script, remotePath); err != nil {
+			if err := run.CopyFile(step.Script, remotePath); err != nil {
 				return fmt.Errorf("copying script %s: %w", step.Script, err)
 			}
 			runCmd := fmt.Sprintf("chmod +x %s && %s%s", remotePath, sudo, remotePath)
-			if err := sshExec(user, ip, runCmd); err != nil {
+			if err := run.Exec(runCmd); err != nil {
 				return fmt.Errorf("running script %s: %w", step.Script, err)
 			}
 		}
@@ -349,18 +322,16 @@ func provisionSetup(mf *machinefile.Machinefile, user, ip, sudo string) error {
 }
 
 // cloneRepo handles git clone with branch and PAT support
-func cloneRepo(c *machinefile.CloneSpec, mf *machinefile.Machinefile, user, ip string) error {
+func cloneRepo(c *machinefile.CloneSpec, mf *machinefile.Machinefile, run CommandRunner) error {
 	repo := c.Repo
 	fmt.Printf("   📥 Cloning %s...\n", repo)
 
-	// PAT auth: rewrite URL
 	if c.PATEnv != "" {
 		pat := mf.Env[c.PATEnv]
 		if pat == "" {
 			pat = os.Getenv(c.PATEnv)
 		}
 		if pat != "" {
-			// https://github.com/org/repo -> https://pat:<token>@github.com/org/repo
 			repo = strings.Replace(repo, "https://", fmt.Sprintf("https://pat:%s@", pat), 1)
 		}
 	}
@@ -371,36 +342,33 @@ func cloneRepo(c *machinefile.CloneSpec, mf *machinefile.Machinefile, user, ip s
 	}
 
 	cmd := fmt.Sprintf("git clone%s %s %s", branch, repo, c.Dest)
-	if err := sshExec(user, ip, cmd); err != nil {
+	if err := run.Exec(cmd); err != nil {
 		return fmt.Errorf("cloning %s: %w", c.Repo, err)
 	}
 
-	// If PAT was used, reset remote to clean URL
 	if c.PATEnv != "" && repo != c.Repo {
-		sshExec(user, ip, fmt.Sprintf("cd %s && git remote set-url origin %s", c.Dest, c.Repo))
+		run.Exec(fmt.Sprintf("cd %s && git remote set-url origin %s", c.Dest, c.Repo))
 	}
 	return nil
 }
 
 // provisionServices creates systemd units for declared services
-func provisionServices(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionServices(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if len(mf.Services) == 0 {
 		return nil
 	}
 	for _, svc := range mf.Services {
 		fmt.Printf("   ⚙️  Setting up service: %s\n", svc.Name)
 
-		// Download binary if install URL provided
 		if svc.Install != "" {
 			fmt.Printf("   📥 Downloading %s...\n", svc.Install)
 			dlCmd := fmt.Sprintf("%scurl -fsSL -o /usr/local/bin/%s '%s' && %schmod +x /usr/local/bin/%s",
 				sudo, svc.Name, svc.Install, sudo, svc.Name)
-			if err := sshExec(user, ip, dlCmd); err != nil {
+			if err := run.Exec(dlCmd); err != nil {
 				return fmt.Errorf("downloading %s: %w", svc.Name, err)
 			}
 		}
 
-		// Build systemd unit
 		workdir := svc.Workdir
 		if workdir == "" {
 			workdir = "/opt/project"
@@ -434,17 +402,15 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target`, svc.Name, svcUser, workdir, svc.Cmd, restart, envLines)
 
-		// Write unit file
 		writeCmd := fmt.Sprintf("echo '%s' | %stee /etc/systemd/system/%s.service > /dev/null",
 			strings.ReplaceAll(unit, "'", "'\\''"), sudo, svc.Name)
-		if err := sshExec(user, ip, writeCmd); err != nil {
+		if err := run.Exec(writeCmd); err != nil {
 			return fmt.Errorf("writing systemd unit for %s: %w", svc.Name, err)
 		}
 
-		// Enable and start
 		startCmd := fmt.Sprintf("%ssystemctl daemon-reload && %ssystemctl enable %s && %ssystemctl start %s",
 			sudo, sudo, svc.Name, sudo, svc.Name)
-		if err := sshExec(user, ip, startCmd); err != nil {
+		if err := run.Exec(startCmd); err != nil {
 			return fmt.Errorf("starting service %s: %w", svc.Name, err)
 		}
 		fmt.Printf("   ✅ Service '%s' running\n", svc.Name)
@@ -453,20 +419,18 @@ WantedBy=multi-user.target`, svc.Name, svcUser, workdir, svc.Cmd, restart, envLi
 }
 
 // provisionReverseProxy installs Caddy and configures routes
-func provisionReverseProxy(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionReverseProxy(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if mf.ReverseProxy == nil || len(mf.ReverseProxy.Routes) == 0 {
 		return nil
 	}
 	fmt.Printf("   🌐 Setting up reverse proxy (Caddy)...\n")
 
-	// Install Caddy via official repo
 	installCmd := fmt.Sprintf(`%sapt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl && %scurl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | %sgpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null && %scurl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | %stee /etc/apt/sources.list.d/caddy-stable.list > /dev/null && %s`,
 		sudo, sudo, sudo, sudo, sudo, aptInstall(sudo, "caddy"))
-	if err := sshExec(user, ip, installCmd); err != nil {
+	if err := run.Exec(installCmd); err != nil {
 		return fmt.Errorf("installing Caddy: %w", err)
 	}
 
-	// Build Caddyfile
 	host := ":443"
 	tlsLine := "	tls internal"
 	if mf.ReverseProxy.Domain != "" {
@@ -488,16 +452,14 @@ func provisionReverseProxy(mf *machinefile.Machinefile, user, ip, sudo string) e
 	}
 	caddyfile.WriteString("}\n")
 
-	// Write Caddyfile
 	writeCmd := fmt.Sprintf("echo '%s' | %stee /etc/caddy/Caddyfile > /dev/null",
 		strings.ReplaceAll(caddyfile.String(), "'", "'\\''"), sudo)
-	if err := sshExec(user, ip, writeCmd); err != nil {
+	if err := run.Exec(writeCmd); err != nil {
 		return fmt.Errorf("writing Caddyfile: %w", err)
 	}
 
-	// Enable and restart Caddy
 	startCmd := fmt.Sprintf("%ssystemctl enable caddy && %ssystemctl restart caddy", sudo, sudo)
-	if err := sshExec(user, ip, startCmd); err != nil {
+	if err := run.Exec(startCmd); err != nil {
 		return fmt.Errorf("starting Caddy: %w", err)
 	}
 	fmt.Printf("   ✅ Reverse proxy configured\n")
@@ -505,23 +467,21 @@ func provisionReverseProxy(mf *machinefile.Machinefile, user, ip, sudo string) e
 }
 
 // provisionMOTD sets the message of the day
-func provisionMOTD(mf *machinefile.Machinefile, user, ip, sudo string) error {
+func provisionMOTD(mf *machinefile.Machinefile, run CommandRunner, ip, sudo string) error {
 	if mf.MOTD == "" {
 		return nil
 	}
 	fmt.Printf("   📝 Setting MOTD...\n")
 
-	// Template variables
 	motd := mf.MOTD
 	motd = strings.ReplaceAll(motd, "{{ .Name }}", mf.Name)
 	motd = strings.ReplaceAll(motd, "{{.Name}}", mf.Name)
 	motd = strings.ReplaceAll(motd, "{{ .Provider }}", mf.Provider)
 	motd = strings.ReplaceAll(motd, "{{.Provider}}", mf.Provider)
-	// IP is not known at parse time, but we can try
 	motd = strings.ReplaceAll(motd, "{{ .IP }}", ip)
 	motd = strings.ReplaceAll(motd, "{{.IP}}", ip)
 
 	cmd := fmt.Sprintf("echo '%s' | %stee /etc/motd > /dev/null && %schmod -x /etc/update-motd.d/* 2>/dev/null; true",
 		strings.ReplaceAll(motd, "'", "'\\''"), sudo, sudo)
-	return sshExec(user, ip, cmd)
+	return run.Exec(cmd)
 }

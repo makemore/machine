@@ -5,7 +5,7 @@ set -e
 # Usage: curl -fsSL https://makemore.github.io/machine/install.sh | sh
 
 REPO="makemore/machine"
-VERSION="v0.2.0"
+VERSION="v0.3.0"
 INSTALL_DIR="/usr/local/bin"
 
 # Detect OS

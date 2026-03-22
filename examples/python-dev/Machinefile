@@ -1,23 +1,22 @@
 name: python-dev
 
 os: linux
+provider: lima
+swap: 2gb
 
 resources:
   cpu: 4
   memory: 4gb
 
 setup:
-  - install: python3
-  - install: python3-pip
-  - install: git
+  - install: git curl python3 python3-dev build-essential
+  - cmd: curl -LsSf https://astral.sh/uv/install.sh | sh
   - clone:
       repo: https://github.com/octocat/Hello-World
       dest: /home/lima.linux/hello-world
 
-run:
-  - cmd: python3 --version
-  - cmd: pip3 --version
-
 expose:
   - 8000
 
+motd: |
+  Python Dev Environment: {{.Name}}
