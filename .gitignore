@@ -13,6 +13,7 @@
 # Build output
 mach
 /mach
+dist/
 
 # OS
 .DS_Store
