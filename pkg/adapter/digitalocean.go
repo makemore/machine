@@ -123,20 +123,8 @@ func (d *DigitalOceanAdapter) mapImage(image string) string {
 	}
 }
 
-// getSSHKeyFingerprint uploads or finds the SSH key on DO
-func (d *DigitalOceanAdapter) getSSHKeyFingerprint(mf *machinefile.Machinefile) (string, error) {
-	if mf.SSHKey == "" {
-		return "", fmt.Errorf("no SSH key found — create one with: ssh-keygen -t ed25519")
-	}
-
-	pubKeyData, err := os.ReadFile(mf.SSHKey)
-	if err != nil {
-		return "", fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
-	}
-	pubKey := strings.TrimSpace(string(pubKeyData))
-	keyName := fmt.Sprintf("mach-%s", mf.Name)
-
-	// Try to create (will fail with 422 if already exists, that's fine)
+// uploadDOSSHKey uploads a single key to DO and returns its fingerprint
+func (d *DigitalOceanAdapter) uploadDOSSHKey(keyName, pubKey string) (string, error) {
 	createResp, status, err := d.doRequest("POST", "/account/keys", map[string]string{
 		"name":       keyName,
 		"public_key": pubKey,
@@ -144,15 +132,11 @@ func (d *DigitalOceanAdapter) getSSHKeyFingerprint(mf *machinefile.Machinefile) 
 	if err != nil {
 		return "", err
 	}
-
-
-
 	var keyResult struct {
 		SSHKey struct {
 			Fingerprint string `json:"fingerprint"`
 		} `json:"ssh_key"`
 	}
-
 	if status == 201 {
 		if err := json.Unmarshal(createResp, &keyResult); err != nil {
 			return "", err
@@ -179,7 +163,38 @@ func (d *DigitalOceanAdapter) getSSHKeyFingerprint(mf *machinefile.Machinefile) 
 			return k.Fingerprint, nil
 		}
 	}
-	return "", fmt.Errorf("failed to create or find SSH key: HTTP %d: %s", status, string(createResp))
+	return "", fmt.Errorf("failed to create or find SSH key '%s': HTTP %d: %s", keyName, status, string(createResp))
+}
+
+// getSSHKeyFingerprints uploads all SSH keys and returns fingerprints
+func (d *DigitalOceanAdapter) getSSHKeyFingerprints(mf *machinefile.Machinefile) ([]string, error) {
+	var fps []string
+
+	if len(mf.SSHKeys) > 0 {
+		for _, key := range mf.SSHKeys {
+			keyName := fmt.Sprintf("mach-%s-%s", mf.Name, key.Username)
+			fp, err := d.uploadDOSSHKey(keyName, key.PublicKey)
+			if err != nil {
+				return nil, fmt.Errorf("SSH key for %s: %w", key.Username, err)
+			}
+			fps = append(fps, fp)
+		}
+		return fps, nil
+	}
+
+	if mf.SSHKey == "" {
+		return nil, fmt.Errorf("no SSH key found — create one with: ssh-keygen -t ed25519")
+	}
+	pubKeyData, err := os.ReadFile(mf.SSHKey)
+	if err != nil {
+		return nil, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
+	}
+	keyName := fmt.Sprintf("mach-%s", mf.Name)
+	fp, err := d.uploadDOSSHKey(keyName, strings.TrimSpace(string(pubKeyData)))
+	if err != nil {
+		return nil, err
+	}
+	return []string{fp}, nil
 }
 
 // getDroplet returns the droplet info by name
@@ -228,6 +243,53 @@ func (d *DigitalOceanAdapter) execInVM(ip, command string) error {
 	return cmd.Run()
 }
 
+// setupFirewall creates a DO firewall for exposed ports + SSH
+func (d *DigitalOceanAdapter) setupFirewall(mf *machinefile.Machinefile, dropletID int64) error {
+	fwName := fmt.Sprintf("mach-%s", mf.Name)
+
+	// Build inbound rules
+	inboundRules := []map[string]interface{}{
+		{"protocol": "tcp", "ports": "22", "sources": map[string]interface{}{"addresses": []string{"0.0.0.0/0", "::/0"}}},
+		{"protocol": "icmp", "sources": map[string]interface{}{"addresses": []string{"0.0.0.0/0", "::/0"}}},
+	}
+	for _, port := range mf.Expose {
+		inboundRules = append(inboundRules, map[string]interface{}{
+			"protocol": "tcp",
+			"ports":    fmt.Sprintf("%d", port),
+			"sources":  map[string]interface{}{"addresses": []string{"0.0.0.0/0", "::/0"}},
+		})
+	}
+
+	// Allow all outbound
+	outboundRules := []map[string]interface{}{
+		{"protocol": "tcp", "ports": "all", "destinations": map[string]interface{}{"addresses": []string{"0.0.0.0/0", "::/0"}}},
+		{"protocol": "udp", "ports": "all", "destinations": map[string]interface{}{"addresses": []string{"0.0.0.0/0", "::/0"}}},
+		{"protocol": "icmp", "destinations": map[string]interface{}{"addresses": []string{"0.0.0.0/0", "::/0"}}},
+	}
+
+	body := map[string]interface{}{
+		"name":           fwName,
+		"inbound_rules":  inboundRules,
+		"outbound_rules": outboundRules,
+		"droplet_ids":    []int64{dropletID},
+	}
+
+	_, status, err := d.doRequest("POST", "/firewalls", body)
+	if err != nil {
+		return err
+	}
+	if status != 202 {
+		return fmt.Errorf("creating firewall: HTTP %d", status)
+	}
+
+	ports := make([]string, len(mf.Expose))
+	for i, p := range mf.Expose {
+		ports[i] = fmt.Sprintf("%d", p)
+	}
+	fmt.Printf("   🔥 Firewall created (SSH + ports: %s)\n", strings.Join(ports, ", "))
+	return nil
+}
+
 // Create creates a DigitalOcean droplet
 func (d *DigitalOceanAdapter) Create(mf *machinefile.Machinefile) error {
 	// Check if droplet already exists
@@ -244,9 +306,9 @@ func (d *DigitalOceanAdapter) Create(mf *machinefile.Machinefile) error {
 		return err
 	}
 
-	// Get SSH key
-	fmt.Printf("   🔑 Setting up SSH key...\n")
-	fingerprint, err := d.getSSHKeyFingerprint(mf)
+	// Get SSH keys
+	fmt.Printf("   🔑 Setting up SSH key(s)...\n")
+	fingerprints, err := d.getSSHKeyFingerprints(mf)
 	if err != nil {
 		return err
 	}
@@ -262,8 +324,17 @@ func (d *DigitalOceanAdapter) Create(mf *machinefile.Machinefile) error {
 		"region":   region,
 		"size":     size,
 		"image":    image,
-		"ssh_keys": []string{fingerprint},
+		"ssh_keys": fingerprints,
 		"tags":     []string{"mach"},
+	}
+
+	// Add cloud-init user_data if specified
+	if mf.CloudInit != "" {
+		userData, err := os.ReadFile(mf.CloudInit)
+		if err != nil {
+			return fmt.Errorf("reading cloud-init file %s: %w", mf.CloudInit, err)
+		}
+		createBody["user_data"] = string(userData)
 	}
 
 	createResp, respStatus, err := d.doRequest("POST", "/droplets", createBody)
@@ -283,7 +354,16 @@ func (d *DigitalOceanAdapter) Create(mf *machinefile.Machinefile) error {
 		return err
 	}
 
-	fmt.Printf("   📡 Droplet created (ID: %d)\n", createResult.Droplet.ID)
+	dropletID := createResult.Droplet.ID
+	fmt.Printf("   📡 Droplet created (ID: %d)\n", dropletID)
+
+	// Set up firewall for exposed ports
+	if len(mf.Expose) > 0 {
+		if err := d.setupFirewall(mf, dropletID); err != nil {
+			fmt.Printf("   ⚠️  Firewall setup failed: %v\n", err)
+		}
+	}
+
 	fmt.Printf("   ⏳ Waiting for IP and SSH...\n")
 
 	for i := 0; i < 60; i++ {
@@ -309,29 +389,7 @@ func (d *DigitalOceanAdapter) Provision(mf *machinefile.Machinefile) error {
 	if err != nil {
 		return err
 	}
-	for _, step := range mf.Setup {
-		if step.Install != "" {
-			fmt.Printf("   📦 Installing %s...\n", step.Install)
-			cmd := fmt.Sprintf("while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do echo '   ⏳ Waiting for apt lock...'; sleep 3; done && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y %s", step.Install)
-			if err := d.execInVM(ip, cmd); err != nil {
-				return fmt.Errorf("installing %s: %w", step.Install, err)
-			}
-		}
-		if step.Clone != nil {
-			fmt.Printf("   📥 Cloning %s...\n", step.Clone.Repo)
-			cmd := fmt.Sprintf("git clone %s %s", step.Clone.Repo, step.Clone.Dest)
-			if err := d.execInVM(ip, cmd); err != nil {
-				return fmt.Errorf("cloning %s: %w", step.Clone.Repo, err)
-			}
-		}
-		if step.Cmd != "" {
-			fmt.Printf("   ▶️  Running: %s\n", step.Cmd)
-			if err := d.execInVM(ip, step.Cmd); err != nil {
-				return fmt.Errorf("running cmd: %w", err)
-			}
-		}
-	}
-	return nil
+	return provisionCloud(mf, "root", ip, false)
 }
 
 // Run executes run commands
@@ -457,4 +515,21 @@ func (d *DigitalOceanAdapter) Status(mf *machinefile.Machinefile) error {
 		}
 	}
 	return fmt.Errorf("droplet '%s' not found", mf.Name)
+}
+
+// Info returns structured machine info
+func (d *DigitalOceanAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
+	id, ip, status, err := d.getDroplet(mf.Name)
+	if err != nil {
+		return nil, err
+	}
+	_ = id
+	return &MachineInfo{
+		Name:     mf.Name,
+		Status:   status,
+		Provider: "digitalocean",
+		IP:       ip,
+		Region:   mf.Region,
+		OS:       mf.OS,
+	}, nil
 }

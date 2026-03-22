@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -26,9 +27,19 @@ var statusCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if err := ad.Status(mf); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+		if jsonOutput {
+			info, err := ad.Info(mf)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			out, _ := json.Marshal(info)
+			fmt.Println(string(out))
+		} else {
+			if err := ad.Status(mf); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 		}
 	},
 }

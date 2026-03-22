@@ -270,3 +270,14 @@ func (t *TartAdapter) Status(mf *machinefile.Machinefile) error {
 
 	return fmt.Errorf("machine '%s' not found (has it been created?)", mf.Name)
 }
+
+// Info returns structured machine info
+func (t *TartAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
+	return &MachineInfo{
+		Name:     mf.Name,
+		Status:   "unknown",
+		Provider: "local",
+		OS:       "macos",
+		CPUs:     mf.Resources.CPU,
+	}, nil
+}

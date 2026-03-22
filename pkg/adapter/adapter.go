@@ -2,6 +2,20 @@ package adapter
 
 import "github.com/makemore/machine/pkg/machinefile"
 
+// MachineInfo is the structured data returned by Status and Create
+type MachineInfo struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Provider string `json:"provider"`
+	IP       string `json:"ip,omitempty"`
+	Region   string `json:"region,omitempty"`
+	CPUs     int    `json:"cpus,omitempty"`
+	MemoryMB int    `json:"memory_mb,omitempty"`
+	DiskGB   int    `json:"disk_gb,omitempty"`
+	OS       string `json:"os,omitempty"`
+	Type     string `json:"type,omitempty"` // instance type / server type
+}
+
 // Adapter defines the interface that all platform adapters must implement
 type Adapter interface {
 	// Create creates the VM
@@ -24,5 +38,8 @@ type Adapter interface {
 
 	// Status returns the current status of the VM
 	Status(mf *machinefile.Machinefile) error
+
+	// Info returns structured machine info (for --json output)
+	Info(mf *machinefile.Machinefile) (*MachineInfo, error)
 }
 

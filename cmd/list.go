@@ -44,7 +44,29 @@ var listCmd = &cobra.Command{
 		entries = append(entries, listDigitalOceanVMs()...)
 
 		if len(entries) == 0 {
-			fmt.Println("No machines found.")
+			if jsonOutput {
+				fmt.Println("[]")
+			} else {
+				fmt.Println("No machines found.")
+			}
+			return
+		}
+
+		if jsonOutput {
+			type jsonEntry struct {
+				Name   string `json:"name"`
+				Status string `json:"status"`
+				OS     string `json:"os"`
+				CPUs   string `json:"cpus,omitempty"`
+				Memory string `json:"memory,omitempty"`
+				Disk   string `json:"disk,omitempty"`
+			}
+			var out []jsonEntry
+			for _, e := range entries {
+				out = append(out, jsonEntry{Name: e.Name, Status: e.Status, OS: e.OS, CPUs: e.CPUs, Memory: e.Memory, Disk: e.Disk})
+			}
+			data, _ := json.Marshal(out)
+			fmt.Println(string(data))
 			return
 		}
 

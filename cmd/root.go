@@ -9,6 +9,8 @@ import (
 )
 
 var machineFile string
+var jsonOutput bool
+var stateFile string
 
 var rootCmd = &cobra.Command{
 	Use:   "mach",
@@ -32,6 +34,8 @@ func init() {
 	_ = godotenv.Load()
 
 	rootCmd.PersistentFlags().StringVarP(&machineFile, "file", "f", "Machinefile", "Path to Machinefile")
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output machine-readable JSON")
+	rootCmd.PersistentFlags().StringVar(&stateFile, "state-file", "", "Path to state file (default: ~/.config/machine/state/<name>.json)")
 
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)

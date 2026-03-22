@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/makemore/machine/pkg/adapter"
 	"github.com/makemore/machine/pkg/machinefile"
+	"github.com/makemore/machine/pkg/state"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +56,31 @@ var upCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf("✅ Machine '%s' is up!\n", mf.Name)
-		fmt.Printf("   Connect with: mach ssh\n")
+		// Get machine info and save state
+		info, infoErr := ad.Info(mf)
+		if infoErr != nil {
+			info = &adapter.MachineInfo{Name: mf.Name, Status: "running", Provider: mf.Provider, OS: mf.OS}
+		}
+
+		// Save state file
+		_, sfPath := state.LoadOrDefault(stateFile, mf.Name)
+		_ = state.Save(sfPath, &state.MachineState{
+			Name:      info.Name,
+			Provider:  info.Provider,
+			ServerID:  "", // adapters can set this
+			IP:        info.IP,
+			Status:    info.Status,
+			Region:    info.Region,
+			SSHUser:   "root",
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+
+		if jsonOutput {
+			out, _ := json.Marshal(info)
+			fmt.Println(string(out))
+		} else {
+			fmt.Printf("✅ Machine '%s' is up!\n", mf.Name)
+			fmt.Printf("   Connect with: mach ssh\n")
+		}
 	},
 }

@@ -15,11 +15,14 @@ type Machinefile struct {
 	PackageManager string    `yaml:"packageManager,omitempty"`
 	Provider       string    `yaml:"provider,omitempty"`       // local (default), hetzner, digitalocean, gcp
 	Region         string    `yaml:"region,omitempty"`         // cloud region/datacenter
-	SSHKey         string    `yaml:"sshKey,omitempty"`         // path to SSH public key for cloud VMs
-	Resources      Resources `yaml:"resources"`
-	Setup          []Step    `yaml:"setup"`
-	Run            []Step    `yaml:"run"`
-	Expose         []int     `yaml:"expose"`
+	SSHKey         string            `yaml:"sshKey,omitempty"`         // path to SSH public key for cloud VMs
+	SSHKeys        []SSHKeySpec      `yaml:"ssh_keys,omitempty"`       // multiple SSH keys with usernames
+	CloudInit      string            `yaml:"cloud_init,omitempty"`     // path to cloud-init/user-data file
+	Env            map[string]string `yaml:"env,omitempty"`            // environment variables to inject
+	Resources      Resources         `yaml:"resources"`
+	Setup          []Step            `yaml:"setup"`
+	Run            []Step            `yaml:"run"`
+	Expose         []int             `yaml:"expose"`
 }
 
 // Resources defines CPU and memory allocation
@@ -28,12 +31,19 @@ type Resources struct {
 	Memory string `yaml:"memory"`
 }
 
+// SSHKeySpec represents an SSH key for multi-user VMs
+type SSHKeySpec struct {
+	Username  string `yaml:"username"`
+	PublicKey string `yaml:"public_key"`
+}
+
 // Step represents a setup or run step
-// Can be: install, clone, or cmd
+// Can be: install, clone, cmd, or script
 type Step struct {
 	Install string      `yaml:"install,omitempty"`
 	Clone   *CloneSpec  `yaml:"clone,omitempty"`
 	Cmd     string      `yaml:"cmd,omitempty"`
+	Script  string      `yaml:"script,omitempty"`   // path to a local script to run on VM
 }
 
 // CloneSpec represents git clone parameters

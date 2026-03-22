@@ -6,6 +6,7 @@ import (
 
 	"github.com/makemore/machine/pkg/adapter"
 	"github.com/makemore/machine/pkg/machinefile"
+	"github.com/makemore/machine/pkg/state"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +33,10 @@ var destroyCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error destroying: %v\n", err)
 			os.Exit(1)
 		}
+
+		// Clean up state file
+		_, sfPath := state.LoadOrDefault(stateFile, mf.Name)
+		_ = state.Remove(sfPath)
 
 		fmt.Printf("✅ Machine '%s' destroyed\n", mf.Name)
 	},

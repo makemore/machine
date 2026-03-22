@@ -155,6 +155,19 @@ func (g *GCPAdapter) execInVM(name, zone, command string) error {
 // Provision runs setup steps on the instance
 func (g *GCPAdapter) Provision(mf *machinefile.Machinefile) error {
 	zone := g.mapZone(mf.Region)
+
+	// Inject environment variables
+	if len(mf.Env) > 0 {
+		fmt.Printf("   🔧 Setting %d environment variable(s)...\n", len(mf.Env))
+		var envLines []string
+		for k, v := range mf.Env {
+			envLines = append(envLines, fmt.Sprintf("echo 'export %s=%q' | sudo tee -a /etc/environment > /dev/null", k, v))
+		}
+		if err := g.execInVM(mf.Name, zone, strings.Join(envLines, " && ")); err != nil {
+			return fmt.Errorf("setting env vars: %w", err)
+		}
+	}
+
 	for _, step := range mf.Setup {
 		if step.Install != "" {
 			fmt.Printf("   📦 Installing %s...\n", step.Install)
@@ -174,6 +187,20 @@ func (g *GCPAdapter) Provision(mf *machinefile.Machinefile) error {
 			fmt.Printf("   ▶️  Running: %s\n", step.Cmd)
 			if err := g.execInVM(mf.Name, zone, step.Cmd); err != nil {
 				return fmt.Errorf("running cmd: %w", err)
+			}
+		}
+		if step.Script != "" {
+			fmt.Printf("   📜 Running script: %s\n", step.Script)
+			remotePath := "/tmp/mach-script.sh"
+			scpCmd := exec.Command("gcloud", "compute", "scp", step.Script,
+				fmt.Sprintf("%s:%s", mf.Name, remotePath), "--zone", zone)
+			scpCmd.Stdout = os.Stdout
+			scpCmd.Stderr = os.Stderr
+			if err := scpCmd.Run(); err != nil {
+				return fmt.Errorf("copying script: %w", err)
+			}
+			if err := g.execInVM(mf.Name, zone, fmt.Sprintf("chmod +x %s && sudo %s", remotePath, remotePath)); err != nil {
+				return fmt.Errorf("running script: %w", err)
 			}
 		}
 	}
@@ -268,4 +295,37 @@ func (g *GCPAdapter) Status(mf *machinefile.Machinefile) error {
 		fmt.Printf("   IP:       %s\n", ip)
 	}
 	return nil
+}
+
+// Info returns structured machine info
+func (g *GCPAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
+	zone := g.mapZone(mf.Region)
+	output, err := g.gcloud("compute", "instances", "describe", mf.Name, "--zone", zone, "--format=json")
+	if err != nil {
+		return nil, fmt.Errorf("instance '%s' not found", mf.Name)
+	}
+	var instance struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		NetworkInterfaces []struct {
+			AccessConfigs []struct {
+				NatIP string `json:"natIP"`
+			} `json:"accessConfigs"`
+		} `json:"networkInterfaces"`
+	}
+	if err := json.Unmarshal([]byte(output), &instance); err != nil {
+		return nil, err
+	}
+	ip := ""
+	if len(instance.NetworkInterfaces) > 0 && len(instance.NetworkInterfaces[0].AccessConfigs) > 0 {
+		ip = instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
+	}
+	return &MachineInfo{
+		Name:     instance.Name,
+		Status:   strings.ToLower(instance.Status),
+		Provider: "gcp",
+		IP:       ip,
+		Region:   zone,
+		OS:       mf.OS,
+	}, nil
 }

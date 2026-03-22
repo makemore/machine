@@ -117,19 +117,8 @@ func (h *HetznerAdapter) mapImage(image string) string {
 	}
 }
 
-// getSSHKeyID uploads or finds the SSH key on Hetzner, returns its ID
-func (h *HetznerAdapter) getSSHKeyID(mf *machinefile.Machinefile) (int64, error) {
-	if mf.SSHKey == "" {
-		return 0, fmt.Errorf("no SSH key found — create one with: ssh-keygen -t ed25519")
-	}
-
-	pubKeyData, err := os.ReadFile(mf.SSHKey)
-	if err != nil {
-		return 0, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
-	}
-	pubKey := strings.TrimSpace(string(pubKeyData))
-	keyName := fmt.Sprintf("mach-%s", mf.Name)
-
+// uploadSSHKey uploads a single key to Hetzner and returns its ID
+func (h *HetznerAdapter) uploadSSHKey(keyName, pubKey string) (int64, error) {
 	// Check if key already exists
 	resp, status, err := h.hetznerRequest("GET", "/ssh_keys?name="+keyName, nil)
 	if err != nil {
@@ -146,8 +135,6 @@ func (h *HetznerAdapter) getSSHKeyID(mf *machinefile.Machinefile) (int64, error)
 		}
 	}
 
-
-
 	// Create key
 	createResp, status, err := h.hetznerRequest("POST", "/ssh_keys", map[string]string{
 		"name":       keyName,
@@ -157,7 +144,7 @@ func (h *HetznerAdapter) getSSHKeyID(mf *machinefile.Machinefile) (int64, error)
 		return 0, err
 	}
 	if status != 201 {
-		return 0, fmt.Errorf("creating SSH key: HTTP %d: %s", status, string(createResp))
+		return 0, fmt.Errorf("creating SSH key '%s': HTTP %d: %s", keyName, status, string(createResp))
 	}
 
 	var createResult struct {
@@ -169,6 +156,39 @@ func (h *HetznerAdapter) getSSHKeyID(mf *machinefile.Machinefile) (int64, error)
 		return 0, err
 	}
 	return createResult.SSHKey.ID, nil
+}
+
+// getSSHKeyIDs uploads all SSH keys and returns their IDs
+func (h *HetznerAdapter) getSSHKeyIDs(mf *machinefile.Machinefile) ([]int64, error) {
+	var ids []int64
+
+	// Handle ssh_keys: list (multi-user)
+	if len(mf.SSHKeys) > 0 {
+		for _, key := range mf.SSHKeys {
+			keyName := fmt.Sprintf("mach-%s-%s", mf.Name, key.Username)
+			id, err := h.uploadSSHKey(keyName, key.PublicKey)
+			if err != nil {
+				return nil, fmt.Errorf("SSH key for %s: %w", key.Username, err)
+			}
+			ids = append(ids, id)
+		}
+		return ids, nil
+	}
+
+	// Fall back to single sshKey: file path
+	if mf.SSHKey == "" {
+		return nil, fmt.Errorf("no SSH key found — create one with: ssh-keygen -t ed25519")
+	}
+	pubKeyData, err := os.ReadFile(mf.SSHKey)
+	if err != nil {
+		return nil, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
+	}
+	keyName := fmt.Sprintf("mach-%s", mf.Name)
+	id, err := h.uploadSSHKey(keyName, strings.TrimSpace(string(pubKeyData)))
+	if err != nil {
+		return nil, err
+	}
+	return []int64{id}, nil
 }
 
 // Create creates a Hetzner Cloud server
@@ -195,9 +215,9 @@ func (h *HetznerAdapter) Create(mf *machinefile.Machinefile) error {
 		return err
 	}
 
-	// Get SSH key
-	fmt.Printf("   🔑 Setting up SSH key...\n")
-	sshKeyID, err := h.getSSHKeyID(mf)
+	// Get SSH keys
+	fmt.Printf("   🔑 Setting up SSH key(s)...\n")
+	sshKeyIDs, err := h.getSSHKeyIDs(mf)
 	if err != nil {
 		return err
 	}
@@ -213,8 +233,17 @@ func (h *HetznerAdapter) Create(mf *machinefile.Machinefile) error {
 		"server_type":        serverType,
 		"location":           location,
 		"image":              image,
-		"ssh_keys":           []int64{sshKeyID},
+		"ssh_keys":           sshKeyIDs,
 		"start_after_create": true,
+	}
+
+	// Add cloud-init user_data if specified
+	if mf.CloudInit != "" {
+		userData, err := os.ReadFile(mf.CloudInit)
+		if err != nil {
+			return fmt.Errorf("reading cloud-init file %s: %w", mf.CloudInit, err)
+		}
+		createBody["user_data"] = string(userData)
 	}
 
 	createResp, status, err := h.hetznerRequest("POST", "/servers", createBody)
@@ -240,7 +269,15 @@ func (h *HetznerAdapter) Create(mf *machinefile.Machinefile) error {
 	}
 
 	ip := createResult.Server.PublicNet.IPv4.IP
-	fmt.Printf("   📡 Server created (ID: %d, IP: %s)\n", createResult.Server.ID, ip)
+	serverID := createResult.Server.ID
+	fmt.Printf("   📡 Server created (ID: %d, IP: %s)\n", serverID, ip)
+
+	// Set up firewall for exposed ports
+	if len(mf.Expose) > 0 {
+		if err := h.setupFirewall(mf, serverID); err != nil {
+			fmt.Printf("   ⚠️  Firewall setup failed: %v\n", err)
+		}
+	}
 
 	// Wait for SSH
 	fmt.Printf("   ⏳ Waiting for SSH...\n")
@@ -255,6 +292,56 @@ func (h *HetznerAdapter) Create(mf *machinefile.Machinefile) error {
 	}
 
 	return fmt.Errorf("timed out waiting for SSH on %s", ip)
+}
+
+// setupFirewall creates a Hetzner firewall with rules for exposed ports + SSH
+func (h *HetznerAdapter) setupFirewall(mf *machinefile.Machinefile, serverID int64) error {
+	fwName := fmt.Sprintf("mach-%s", mf.Name)
+
+	// Build rules: always allow SSH + ICMP, plus exposed ports
+	rules := []map[string]interface{}{
+		{"direction": "in", "protocol": "tcp", "port": "22", "source_ips": []string{"0.0.0.0/0", "::/0"}},
+	}
+	for _, port := range mf.Expose {
+		rules = append(rules, map[string]interface{}{
+			"direction":  "in",
+			"protocol":   "tcp",
+			"port":       fmt.Sprintf("%d", port),
+			"source_ips": []string{"0.0.0.0/0", "::/0"},
+		})
+	}
+
+	// Delete existing firewall if any
+	resp, _, _ := h.hetznerRequest("GET", "/firewalls?name="+fwName, nil)
+	var existing struct {
+		Firewalls []struct{ ID int64 `json:"id"` } `json:"firewalls"`
+	}
+	if json.Unmarshal(resp, &existing) == nil && len(existing.Firewalls) > 0 {
+		h.hetznerRequest("DELETE", fmt.Sprintf("/firewalls/%d", existing.Firewalls[0].ID), nil)
+	}
+
+	// Create firewall
+	body := map[string]interface{}{
+		"name":  fwName,
+		"rules": rules,
+		"apply_to": []map[string]interface{}{
+			{"type": "server", "server": map[string]int64{"id": serverID}},
+		},
+	}
+	resp2, status, err := h.hetznerRequest("POST", "/firewalls", body)
+	if err != nil {
+		return err
+	}
+	if status != 201 {
+		return fmt.Errorf("creating firewall: HTTP %d: %s", status, string(resp2))
+	}
+
+	ports := make([]string, len(mf.Expose))
+	for i, p := range mf.Expose {
+		ports[i] = fmt.Sprintf("%d", p)
+	}
+	fmt.Printf("   🔥 Firewall created (SSH + ports: %s)\n", strings.Join(ports, ", "))
+	return nil
 }
 
 // getServerIP returns the IP and ID of the server
@@ -297,30 +384,7 @@ func (h *HetznerAdapter) Provision(mf *machinefile.Machinefile) error {
 	if err != nil {
 		return err
 	}
-
-	for _, step := range mf.Setup {
-		if step.Install != "" {
-			fmt.Printf("   📦 Installing %s...\n", step.Install)
-			cmd := fmt.Sprintf("while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do echo '   ⏳ Waiting for apt lock...'; sleep 3; done && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y %s", step.Install)
-			if err := h.execInVM(ip, cmd); err != nil {
-				return fmt.Errorf("installing %s: %w", step.Install, err)
-			}
-		}
-		if step.Clone != nil {
-			fmt.Printf("   📥 Cloning %s...\n", step.Clone.Repo)
-			cmd := fmt.Sprintf("git clone %s %s", step.Clone.Repo, step.Clone.Dest)
-			if err := h.execInVM(ip, cmd); err != nil {
-				return fmt.Errorf("cloning %s: %w", step.Clone.Repo, err)
-			}
-		}
-		if step.Cmd != "" {
-			fmt.Printf("   ▶️  Running: %s\n", step.Cmd)
-			if err := h.execInVM(ip, step.Cmd); err != nil {
-				return fmt.Errorf("running cmd: %w", err)
-			}
-		}
-	}
-	return nil
+	return provisionCloud(mf, "root", ip, false)
 }
 
 // Run executes run commands
@@ -435,6 +499,53 @@ func (h *HetznerAdapter) Status(mf *machinefile.Machinefile) error {
 	fmt.Printf("   Memory:   %.0f GB\n", srv.ServerType.Memory)
 	fmt.Printf("   Disk:     %d GB\n", srv.ServerType.Disk)
 	return nil
+}
+
+// Info returns structured machine info
+func (h *HetznerAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
+	resp, _, err := h.hetznerRequest("GET", "/servers?name="+mf.Name, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Servers []struct {
+			Name       string `json:"name"`
+			Status     string `json:"status"`
+			ServerType struct {
+				Cores  int     `json:"cores"`
+				Memory float64 `json:"memory"`
+				Disk   int     `json:"disk"`
+				Name   string  `json:"name"`
+			} `json:"server_type"`
+			Datacenter struct {
+				Name string `json:"name"`
+			} `json:"datacenter"`
+			PublicNet struct {
+				IPv4 struct {
+					IP string `json:"ip"`
+				} `json:"ipv4"`
+			} `json:"public_net"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Servers) == 0 {
+		return nil, fmt.Errorf("server '%s' not found", mf.Name)
+	}
+	srv := result.Servers[0]
+	return &MachineInfo{
+		Name:     srv.Name,
+		Status:   srv.Status,
+		Provider: "hetzner",
+		IP:       srv.PublicNet.IPv4.IP,
+		Region:   srv.Datacenter.Name,
+		CPUs:     srv.ServerType.Cores,
+		MemoryMB: int(srv.ServerType.Memory * 1024),
+		DiskGB:   srv.ServerType.Disk,
+		OS:       mf.OS,
+		Type:     srv.ServerType.Name,
+	}, nil
 }
 
 // parseMemoryMB is defined in tart.go (shared across adapters)

@@ -796,3 +796,21 @@ func (q *QemuAdapter) Status(mf *machinefile.Machinefile) error {
 
 	return nil
 }
+
+// Info returns structured machine info
+func (q *QemuAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
+	dir := q.machineDir(mf.Name)
+	diskPath := filepath.Join(dir, "disk.qcow2")
+	status := "stopped"
+	checkCmd := exec.Command("pgrep", "-f", fmt.Sprintf("qemu-system-aarch64.*%s", diskPath))
+	if checkCmd.Run() == nil {
+		status = "running"
+	}
+	return &MachineInfo{
+		Name:     mf.Name,
+		Status:   status,
+		Provider: "local",
+		OS:       "windows",
+		CPUs:     mf.Resources.CPU,
+	}, nil
+}

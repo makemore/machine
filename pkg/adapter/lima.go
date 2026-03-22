@@ -238,3 +238,26 @@ func humanizeBytes(s string) string {
 	}
 	return fmt.Sprintf("%.0f MiB", float64(bytes)/float64(mb))
 }
+
+// Info returns structured machine info
+func (l *LimaAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
+	cmd := exec.Command("limactl", "list", mf.Name, "--format",
+		"{{.Name}}\t{{.Status}}\t{{.Arch}}\t{{.CPUs}}\t{{.Memory}}\t{{.Disk}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("VM '%s' not found", mf.Name)
+	}
+	parts := strings.Split(strings.TrimSpace(string(output)), "\t")
+	if len(parts) < 4 {
+		return nil, fmt.Errorf("unexpected lima output")
+	}
+	cpus := 0
+	fmt.Sscanf(parts[3], "%d", &cpus)
+	return &MachineInfo{
+		Name:     parts[0],
+		Status:   strings.ToLower(parts[1]),
+		Provider: "local",
+		OS:       "linux",
+		CPUs:     cpus,
+	}, nil
+}
