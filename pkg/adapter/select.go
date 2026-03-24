@@ -16,6 +16,8 @@ func Select(mf *machinefile.Machinefile) (Adapter, error) {
 		return NewDigitalOceanAdapter(), nil
 	case "gcp", "google":
 		return NewGCPAdapter(), nil
+	case "lima":
+		return NewLimaAdapter(), nil
 	case "local", "":
 		// Fall through to OS-based selection
 	default:

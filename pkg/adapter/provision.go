@@ -18,9 +18,19 @@ func scpFile(user, ip, localPath, remotePath string) error {
 	return (&SSHRunner{User: user, IP: ip}).CopyFile(localPath, remotePath)
 }
 
-// waitForApt returns a command prefix that waits for apt locks
+// waitForApt returns a command prefix that waits for apt locks.
+// Uses lsof as a fallback when fuser isn't available, and also waits
+// for unattended-upgrades / dpkg to finish (common on fresh VMs).
 func waitForApt(sudo string) string {
-	return fmt.Sprintf("while %sfuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do sleep 3; done", sudo)
+	return fmt.Sprintf(
+		`echo "Waiting for apt locks..." && `+
+			`while %sfuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || `+
+			`%sfuser /var/lib/apt/lists/lock >/dev/null 2>&1 || `+
+			`%sfuser /var/cache/apt/archives/lock >/dev/null 2>&1 || `+
+			`%slsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do `+
+			`echo "  apt locked, waiting..."; sleep 5; done && `+
+			`echo "apt locks clear"`,
+		sudo, sudo, sudo, sudo)
 }
 
 // aptInstall returns a command to install packages via apt
@@ -57,7 +67,13 @@ func provisionAll(mf *machinefile.Machinefile, run CommandRunner, ip string, use
 	if err := provisionSetup(mf, run, sudo); err != nil {
 		return err
 	}
+	if err := finalizeUsers(mf, run, sudo); err != nil {
+		return err
+	}
 	if err := provisionServices(mf, run, sudo); err != nil {
+		return err
+	}
+	if err := provisionConduit(mf, run, sudo); err != nil {
 		return err
 	}
 	if err := provisionReverseProxy(mf, run, sudo); err != nil {
@@ -87,6 +103,16 @@ func provisionEnv(mf *machinefile.Machinefile, run CommandRunner, sudo string) e
 	return run.Exec(cmd)
 }
 
+// hasDockerInstall checks if docker is in the setup steps
+func hasDockerInstall(mf *machinefile.Machinefile) bool {
+	for _, step := range mf.Setup {
+		if step.Install == "docker" {
+			return true
+		}
+	}
+	return false
+}
+
 // provisionUsers creates user accounts with SSH, sudo, git credentials
 func provisionUsers(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
 	if len(mf.Users) == 0 {
@@ -101,7 +127,10 @@ func provisionUsers(mf *machinefile.Machinefile, run CommandRunner, sudo string)
 		sudoEnabled := u.Sudo == nil || *u.Sudo
 
 		var cmds []string
-		cmds = append(cmds, fmt.Sprintf("id -u %s >/dev/null 2>&1 || %suseradd -m -s %s %s", u.Username, sudo, shell, u.Username))
+		// Create user if not exists, or update shell if already exists
+		cmds = append(cmds, fmt.Sprintf("id -u %s >/dev/null 2>&1 && %susermod -s %s %s || %suseradd -m -s %s %s", u.Username, sudo, shell, u.Username, sudo, shell, u.Username))
+		// Ensure home directory exists (for pre-existing users like Lima default)
+		cmds = append(cmds, fmt.Sprintf("%smkdir -p /home/%s", sudo, u.Username))
 		if sudoEnabled {
 			cmds = append(cmds, fmt.Sprintf("%susermod -aG sudo %s", sudo, u.Username))
 			cmds = append(cmds, fmt.Sprintf("echo '%s ALL=(ALL) NOPASSWD:ALL' | %stee /etc/sudoers.d/%s > /dev/null", u.Username, sudo, u.Username))
@@ -122,6 +151,47 @@ func provisionUsers(mf *machinefile.Machinefile, run CommandRunner, sudo string)
 	}
 	return nil
 }
+
+// finalizeUsers runs after setup to copy oh-my-zsh, add docker group, etc.
+// These steps depend on software installed during provisionSetup.
+func finalizeUsers(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
+	if len(mf.Users) == 0 {
+		return nil
+	}
+	dockerInstalled := hasDockerInstall(mf)
+	for _, u := range mf.Users {
+		var cmds []string
+		shell := u.Shell
+		if shell == "" {
+			shell = "/bin/bash"
+		}
+
+		// Add to docker group now that docker is installed
+		if dockerInstalled {
+			cmds = append(cmds, fmt.Sprintf("getent group docker >/dev/null 2>&1 && %susermod -aG docker %s || true", sudo, u.Username))
+		}
+
+		// Copy oh-my-zsh to user home now that setup has installed it
+		if shell == "/bin/zsh" {
+			cmds = append(cmds, fmt.Sprintf(
+				"if [ -d /root/.oh-my-zsh ] && [ ! -d /home/%s/.oh-my-zsh ]; then "+
+					"%scp -r /root/.oh-my-zsh /home/%s/.oh-my-zsh && "+
+					"%scp /root/.zshrc /home/%s/.zshrc 2>/dev/null || true && "+
+					"%schown -R %s:%s /home/%s/.oh-my-zsh /home/%s/.zshrc 2>/dev/null || true; "+
+					"fi",
+				u.Username, sudo, u.Username, sudo, u.Username,
+				sudo, u.Username, u.Username, u.Username, u.Username))
+		}
+
+		if len(cmds) > 0 {
+			if err := run.Exec(strings.Join(cmds, " && ")); err != nil {
+				return fmt.Errorf("finalizing user %s: %w", u.Username, err)
+			}
+		}
+	}
+	return nil
+}
+
 
 // provisionSwap creates a swap file
 func provisionSwap(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
@@ -285,6 +355,9 @@ func provisionSetup(mf *machinefile.Machinefile, run CommandRunner, sudo string)
 				if err := installNodeJS(pkg, run, sudo); err != nil {
 					return err
 				}
+			case pkg == "conduitd" || pkg == "conduit":
+				// Skip — handled by provisionConduit via the conduit: block
+				fmt.Printf("   🔌 conduitd: use the 'conduit:' block in Machinefile instead\n")
 			default:
 				fmt.Printf("   📦 Installing %s...\n", pkg)
 				if err := run.Exec(aptInstall(sudo, pkg)); err != nil {
@@ -417,6 +490,73 @@ WantedBy=multi-user.target`, svc.Name, svcUser, workdir, svc.Cmd, restart, envLi
 	}
 	return nil
 }
+
+const defaultConduitdURLBase = "https://downloads.myconduit.io/agent/latest/conduitd-linux-"
+
+// provisionConduit downloads and installs the conduitd agent as a systemd service
+func provisionConduit(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {
+	if mf.Conduit == nil {
+		return nil
+	}
+	c := mf.Conduit
+	fmt.Printf("   🔌 Installing conduitd agent...\n")
+
+	dlURL := c.DownloadURL
+	if dlURL == "" {
+		// Auto-detect target arch by querying the remote host
+		dlURL = defaultConduitdURLBase + "amd64" // default
+	}
+
+	// Download the binary — detect arch on the target and pick the right URL
+	dlCmd := fmt.Sprintf(
+		`ARCH=$(%suname -m); `+
+			`case "$ARCH" in aarch64|arm64) DL_ARCH=arm64;; *) DL_ARCH=amd64;; esac; `+
+			`DL_URL='%s'; `+
+			`if echo "$DL_URL" | grep -q 'amd64'; then DL_URL=$(echo "$DL_URL" | sed "s/amd64/$DL_ARCH/"); fi; `+
+			`echo "   Downloading conduitd ($DL_ARCH)..." && `+
+			`%scurl -fsSL -o /usr/local/bin/conduitd "$DL_URL" && %schmod +x /usr/local/bin/conduitd`,
+		sudo, dlURL, sudo, sudo)
+	if err := run.Exec(dlCmd); err != nil {
+		return fmt.Errorf("downloading conduitd: %w", err)
+	}
+
+	gwURL := c.GatewayURL
+	if gwURL == "" {
+		gwURL = "wss://gateway.myconduit.io"
+	}
+
+	// Create systemd service
+	unit := fmt.Sprintf(`[Unit]
+Description=Conduit Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/conduitd run
+Restart=always
+RestartSec=5
+Environment=CONDUIT_DEVICE_ID=%s
+Environment=CONDUIT_GATEWAY_URL=%s
+
+[Install]
+WantedBy=multi-user.target`, c.DeviceID, gwURL)
+
+	writeCmd := fmt.Sprintf("echo '%s' | %stee /etc/systemd/system/conduitd.service > /dev/null",
+		strings.ReplaceAll(unit, "'", "'\\''"), sudo)
+	if err := run.Exec(writeCmd); err != nil {
+		return fmt.Errorf("writing conduitd unit: %w", err)
+	}
+
+	startCmd := fmt.Sprintf("%ssystemctl daemon-reload && %ssystemctl enable conduitd && %ssystemctl start conduitd",
+		sudo, sudo, sudo)
+	if err := run.Exec(startCmd); err != nil {
+		return fmt.Errorf("starting conduitd: %w", err)
+	}
+
+	fmt.Printf("   ✅ conduitd agent running (device: %s)\n", c.DeviceID)
+	return nil
+}
+
 
 // provisionReverseProxy installs Caddy and configures routes
 func provisionReverseProxy(mf *machinefile.Machinefile, run CommandRunner, sudo string) error {

@@ -22,7 +22,11 @@ type SSHRunner struct {
 }
 
 func (r *SSHRunner) Exec(command string) error {
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+	cmd := exec.Command("ssh",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=10",
 		fmt.Sprintf("%s@%s", r.User, r.IP), command)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -30,7 +34,10 @@ func (r *SSHRunner) Exec(command string) error {
 }
 
 func (r *SSHRunner) CopyFile(localPath, remotePath string) error {
-	cmd := exec.Command("scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+	cmd := exec.Command("scp",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ServerAliveInterval=30",
 		localPath, fmt.Sprintf("%s@%s:%s", r.User, r.IP, remotePath))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -43,7 +50,9 @@ type LimaRunner struct {
 }
 
 func (r *LimaRunner) Exec(command string) error {
-	cmd := exec.Command("limactl", "shell", r.Name, "bash", "-c", command)
+	// Run as root, clearing SUDO_* vars so npm doesn't drop privileges
+	wrapped := "unset SUDO_UID SUDO_GID SUDO_USER SUDO_COMMAND; export HOME=/root DEBIAN_FRONTEND=noninteractive; " + command
+	cmd := exec.Command("limactl", "shell", "--workdir=/", r.Name, "sudo", "bash", "-c", wrapped)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

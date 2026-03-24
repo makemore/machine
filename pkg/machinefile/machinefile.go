@@ -27,8 +27,18 @@ type Machinefile struct {
 	Setup          []Step            `yaml:"setup"`
 	Run            []Step            `yaml:"run"`
 	Services       []ServiceSpec     `yaml:"services,omitempty"`
+	Conduit        *ConduitSpec      `yaml:"conduit,omitempty"`
 	ReverseProxy   *ReverseProxy     `yaml:"reverse_proxy,omitempty"`
 	Expose         []int             `yaml:"expose"`
+}
+
+// ConduitSpec configures the conduitd agent on the VM.
+// When present, mach automatically downloads, installs, and starts conduitd
+// as a systemd service that connects back to the Conduit gateway.
+type ConduitSpec struct {
+	DeviceID   string `yaml:"device_id"`
+	GatewayURL string `yaml:"gateway_url"`
+	DownloadURL string `yaml:"download_url,omitempty"` // defaults to official release
 }
 
 // Resources defines CPU and memory allocation
