@@ -17,28 +17,43 @@ type CommandRunner interface {
 
 // SSHRunner executes commands via SSH
 type SSHRunner struct {
-	User string
-	IP   string
+	User    string
+	IP      string
+	KeyPath string // optional: explicit path to private key
+}
+
+// sshKeyArgs returns -i flags if a key path is set
+func (r *SSHRunner) sshKeyArgs() []string {
+	if r.KeyPath != "" {
+		return []string{"-i", r.KeyPath}
+	}
+	return nil
 }
 
 func (r *SSHRunner) Exec(command string) error {
-	cmd := exec.Command("ssh",
+	args := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=10",
-		fmt.Sprintf("%s@%s", r.User, r.IP), command)
+	}
+	args = append(args, r.sshKeyArgs()...)
+	args = append(args, fmt.Sprintf("%s@%s", r.User, r.IP), command)
+	cmd := exec.Command("ssh", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func (r *SSHRunner) CopyFile(localPath, remotePath string) error {
-	cmd := exec.Command("scp",
+	args := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ServerAliveInterval=30",
-		localPath, fmt.Sprintf("%s@%s:%s", r.User, r.IP, remotePath))
+	}
+	args = append(args, r.sshKeyArgs()...)
+	args = append(args, localPath, fmt.Sprintf("%s@%s:%s", r.User, r.IP, remotePath))
+	cmd := exec.Command("scp", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

@@ -18,6 +18,15 @@ func scpFile(user, ip, localPath, remotePath string) error {
 	return (&SSHRunner{User: user, IP: ip}).CopyFile(localPath, remotePath)
 }
 
+// sshPrivateKeyPath derives the private key path from the public key path.
+// e.g. "/builder/home/.ssh/id_ed25519.pub" → "/builder/home/.ssh/id_ed25519"
+func sshPrivateKeyPath(pubKeyPath string) string {
+	if pubKeyPath == "" {
+		return ""
+	}
+	return strings.TrimSuffix(pubKeyPath, ".pub")
+}
+
 // waitForApt returns a command prefix that waits for apt locks.
 // Uses lsof as a fallback when fuser isn't available, and also waits
 // for unattended-upgrades / dpkg to finish (common on fresh VMs).
@@ -41,7 +50,7 @@ func aptInstall(sudo, packages string) string {
 
 // provisionCloud runs the full provisioning pipeline on a cloud VM via SSH
 func provisionCloud(mf *machinefile.Machinefile, user, ip string, useSudo bool) error {
-	run := &SSHRunner{User: user, IP: ip}
+	run := &SSHRunner{User: user, IP: ip, KeyPath: sshPrivateKeyPath(mf.SSHKey)}
 	return provisionAll(mf, run, ip, useSudo)
 }
 
@@ -506,6 +515,9 @@ func provisionConduit(mf *machinefile.Machinefile, run CommandRunner, sudo strin
 		// Auto-detect target arch by querying the remote host
 		dlURL = defaultConduitdURLBase + "amd64" // default
 	}
+
+	// Stop existing conduitd if running (can't overwrite a running binary — ETXTBSY)
+	run.Exec(fmt.Sprintf("%ssystemctl stop conduitd 2>/dev/null || true; %srm -f /usr/local/bin/conduitd", sudo, sudo))
 
 	// Download the binary — detect arch on the target and pick the right URL
 	dlCmd := fmt.Sprintf(

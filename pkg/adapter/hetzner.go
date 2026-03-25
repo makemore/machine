@@ -183,33 +183,50 @@ func (h *HetznerAdapter) uploadSSHKey(keyName, pubKey string) (int64, error) {
 func (h *HetznerAdapter) getSSHKeyIDs(mf *machinefile.Machinefile) ([]int64, error) {
 	var ids []int64
 
-	// Handle ssh_keys: list (multi-user)
-	if len(mf.SSHKeys) > 0 {
-		for _, key := range mf.SSHKeys {
-			keyName := fmt.Sprintf("mach-%s-%s", mf.Name, key.Username)
-			id, err := h.uploadSSHKey(keyName, key.PublicKey)
-			if err != nil {
-				return nil, fmt.Errorf("SSH key for %s: %w", key.Username, err)
-			}
-			ids = append(ids, id)
+	// Always include the provisioning SSH key (used by mach to SSH into the VM)
+	fmt.Printf("   🔑 Setting up SSH key(s)...\n")
+	fmt.Printf("      mf.SSHKey=%q  mf.SSHKeys=%d  mf.Users=%d\n", mf.SSHKey, len(mf.SSHKeys), len(mf.Users))
+	if mf.SSHKey != "" {
+		pubKeyData, err := os.ReadFile(mf.SSHKey)
+		if err != nil {
+			return nil, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
 		}
-		return ids, nil
+		keyName := fmt.Sprintf("mach-%s-provisioner", mf.Name)
+		fmt.Printf("      uploading provisioner key: %s\n", keyName)
+		id, err := h.uploadSSHKey(keyName, strings.TrimSpace(string(pubKeyData)))
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
 	}
 
-	// Fall back to single sshKey: file path
-	if mf.SSHKey == "" {
+	// Handle ssh_keys: list (multi-user)
+	for _, key := range mf.SSHKeys {
+		keyName := fmt.Sprintf("mach-%s-%s", mf.Name, key.Username)
+		id, err := h.uploadSSHKey(keyName, key.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("SSH key for %s: %w", key.Username, err)
+		}
+		ids = append(ids, id)
+	}
+
+	// Handle users: list (also has public_key fields)
+	for _, u := range mf.Users {
+		if u.PublicKey == "" {
+			continue
+		}
+		keyName := fmt.Sprintf("mach-%s-%s", mf.Name, u.Username)
+		id, err := h.uploadSSHKey(keyName, u.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("SSH key for user %s: %w", u.Username, err)
+		}
+		ids = append(ids, id)
+	}
+
+	if len(ids) == 0 {
 		return nil, fmt.Errorf("no SSH key found — create one with: ssh-keygen -t ed25519")
 	}
-	pubKeyData, err := os.ReadFile(mf.SSHKey)
-	if err != nil {
-		return nil, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
-	}
-	keyName := fmt.Sprintf("mach-%s", mf.Name)
-	id, err := h.uploadSSHKey(keyName, strings.TrimSpace(string(pubKeyData)))
-	if err != nil {
-		return nil, err
-	}
-	return []int64{id}, nil
+	return ids, nil
 }
 
 // Create creates a Hetzner Cloud server
@@ -301,18 +318,34 @@ func (h *HetznerAdapter) Create(mf *machinefile.Machinefile) error {
 	}
 
 	// Wait for SSH
-	fmt.Printf("   ⏳ Waiting for SSH...\n")
-	for i := 0; i < 60; i++ {
+	keyPath := sshPrivateKeyPath(mf.SSHKey)
+	fmt.Printf("   ⏳ Waiting for SSH on %s (key=%s)...\n", ip, keyPath)
+	maxAttempts := 60
+	for i := 0; i < maxAttempts; i++ {
 		time.Sleep(3 * time.Second)
-		check := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-			"-o", "ConnectTimeout=3", "-o", "BatchMode=yes", fmt.Sprintf("root@%s", ip), "echo ok")
-		if output, err := check.Output(); err == nil && strings.TrimSpace(string(output)) == "ok" {
-			fmt.Printf("   ✅ Server ready at %s\n", ip)
+		sshArgs := []string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+			"-o", "ConnectTimeout=3", "-o", "BatchMode=yes"}
+		if keyPath != "" {
+			sshArgs = append(sshArgs, "-i", keyPath)
+		}
+		sshArgs = append(sshArgs, fmt.Sprintf("root@%s", ip), "echo ok")
+		check := exec.Command("ssh", sshArgs...)
+		output, err := check.CombinedOutput()
+		if err == nil && strings.Contains(string(output), "ok") {
+			fmt.Printf("   ✅ SSH connected after %d seconds\n", (i+1)*3)
 			return nil
+		}
+		// Log progress every 5 attempts (15 seconds)
+		if (i+1)%5 == 0 {
+			errMsg := strings.TrimSpace(string(output))
+			if errMsg == "" && err != nil {
+				errMsg = err.Error()
+			}
+			fmt.Printf("   ⏳ SSH attempt %d/%d — %s\n", i+1, maxAttempts, errMsg)
 		}
 	}
 
-	return fmt.Errorf("timed out waiting for SSH on %s", ip)
+	return fmt.Errorf("timed out waiting for SSH on %s after %d attempts", ip, maxAttempts)
 }
 
 // setupFirewall creates a Hetzner firewall with rules for exposed ports + SSH

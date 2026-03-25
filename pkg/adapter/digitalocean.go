@@ -170,31 +170,47 @@ func (d *DigitalOceanAdapter) uploadDOSSHKey(keyName, pubKey string) (string, er
 func (d *DigitalOceanAdapter) getSSHKeyFingerprints(mf *machinefile.Machinefile) ([]string, error) {
 	var fps []string
 
-	if len(mf.SSHKeys) > 0 {
-		for _, key := range mf.SSHKeys {
-			keyName := fmt.Sprintf("mach-%s-%s", mf.Name, key.Username)
-			fp, err := d.uploadDOSSHKey(keyName, key.PublicKey)
-			if err != nil {
-				return nil, fmt.Errorf("SSH key for %s: %w", key.Username, err)
-			}
-			fps = append(fps, fp)
+	// Always include the provisioning SSH key (used by mach to SSH into the VM)
+	if mf.SSHKey != "" {
+		pubKeyData, err := os.ReadFile(mf.SSHKey)
+		if err != nil {
+			return nil, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
 		}
-		return fps, nil
+		keyName := fmt.Sprintf("mach-%s-provisioner", mf.Name)
+		fp, err := d.uploadDOSSHKey(keyName, strings.TrimSpace(string(pubKeyData)))
+		if err != nil {
+			return nil, err
+		}
+		fps = append(fps, fp)
 	}
 
-	if mf.SSHKey == "" {
+	// Handle ssh_keys: list (multi-user)
+	for _, key := range mf.SSHKeys {
+		keyName := fmt.Sprintf("mach-%s-%s", mf.Name, key.Username)
+		fp, err := d.uploadDOSSHKey(keyName, key.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("SSH key for %s: %w", key.Username, err)
+		}
+		fps = append(fps, fp)
+	}
+
+	// Handle users: list (also has public_key fields)
+	for _, u := range mf.Users {
+		if u.PublicKey == "" {
+			continue
+		}
+		keyName := fmt.Sprintf("mach-%s-%s", mf.Name, u.Username)
+		fp, err := d.uploadDOSSHKey(keyName, u.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("SSH key for user %s: %w", u.Username, err)
+		}
+		fps = append(fps, fp)
+	}
+
+	if len(fps) == 0 {
 		return nil, fmt.Errorf("no SSH key found — create one with: ssh-keygen -t ed25519")
 	}
-	pubKeyData, err := os.ReadFile(mf.SSHKey)
-	if err != nil {
-		return nil, fmt.Errorf("reading SSH key %s: %w", mf.SSHKey, err)
-	}
-	keyName := fmt.Sprintf("mach-%s", mf.Name)
-	fp, err := d.uploadDOSSHKey(keyName, strings.TrimSpace(string(pubKeyData)))
-	if err != nil {
-		return nil, err
-	}
-	return []string{fp}, nil
+	return fps, nil
 }
 
 // getDroplet returns the droplet info by name
