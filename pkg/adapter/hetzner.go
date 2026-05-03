@@ -155,8 +155,12 @@ func (h *HetznerAdapter) uploadSSHKey(keyName, pubKey string) (int64, error) {
 		return createResult.SSHKey.ID, nil
 	}
 
-	// 409 = key already exists under a different name — find it by fingerprint
+	// 409 = key already exists under a different name — find it by matching
+	// the key body (type + base64). Hetzner may store the key with a
+	// normalised/stripped trailing comment, so a full-string compare misses
+	// keys that are functionally identical.
 	if status == 409 {
+		wantBody := sshKeyBody(pubKey)
 		listResp, _, err := h.hetznerRequest("GET", "/ssh_keys?per_page=50", nil)
 		if err != nil {
 			return 0, err
@@ -169,7 +173,7 @@ func (h *HetznerAdapter) uploadSSHKey(keyName, pubKey string) (int64, error) {
 		}
 		if json.Unmarshal(listResp, &listResult) == nil {
 			for _, k := range listResult.SSHKeys {
-				if strings.TrimSpace(k.PublicKey) == strings.TrimSpace(pubKey) {
+				if sshKeyBody(k.PublicKey) == wantBody {
 					return k.ID, nil
 				}
 			}
@@ -177,6 +181,22 @@ func (h *HetznerAdapter) uploadSSHKey(keyName, pubKey string) (int64, error) {
 	}
 
 	return 0, fmt.Errorf("creating SSH key '%s': HTTP %d: %s", keyName, status, string(createResp))
+}
+
+// sshKeyBody returns the type+base64 portion of an OpenSSH public key,
+// dropping any trailing comment. Used to compare two public keys for
+// equivalence regardless of whether their comment was preserved.
+//
+// Examples:
+//
+//	"ssh-ed25519 AAAA... user@host" -> "ssh-ed25519 AAAA..."
+//	"ssh-ed25519 AAAA..."           -> "ssh-ed25519 AAAA..."
+func sshKeyBody(s string) string {
+	parts := strings.Fields(strings.TrimSpace(s))
+	if len(parts) >= 2 {
+		return parts[0] + " " + parts[1]
+	}
+	return strings.TrimSpace(s)
 }
 
 // getSSHKeyIDs uploads all SSH keys and returns their IDs
