@@ -16,6 +16,19 @@ type MachineInfo struct {
 	Type     string `json:"type,omitempty"` // instance type / server type
 }
 
+// SnapshotInfo describes an image/snapshot produced from a running VM.
+// Returned by Adapter.Snapshot so callers (e.g. `mach snapshot`) can
+// record the image id for later use as a Machinefile `image:` value.
+type SnapshotInfo struct {
+	ID          string `json:"id"`                     // provider image id (string form)
+	Name        string `json:"name,omitempty"`         // human label
+	Description string `json:"description,omitempty"`  // free-form
+	Provider    string `json:"provider"`               // hetzner / gcp / digitalocean
+	Region      string `json:"region,omitempty"`       // where the snapshot lives
+	SizeGB      int    `json:"size_gb,omitempty"`      // disk size of the snapshot
+	CreatedAt   string `json:"created_at,omitempty"`   // RFC3339
+}
+
 // Adapter defines the interface that all platform adapters must implement
 type Adapter interface {
 	// Create creates the VM
@@ -41,5 +54,20 @@ type Adapter interface {
 
 	// Info returns structured machine info (for --json output)
 	Info(mf *machinefile.Machinefile) (*MachineInfo, error)
+
+	// Snapshot creates a provider-native image/snapshot of the VM identified
+	// by mf.Name and returns its id. Adapters that do not yet support this
+	// should return ErrSnapshotUnsupported.
+	Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error)
+}
+
+// ErrSnapshotUnsupported is returned by adapters that have not yet
+// implemented Snapshot. Callers should treat it as a soft failure.
+var ErrSnapshotUnsupported = errSnapshotUnsupported{}
+
+type errSnapshotUnsupported struct{}
+
+func (errSnapshotUnsupported) Error() string {
+	return "snapshot is not supported on this provider yet"
 }
 

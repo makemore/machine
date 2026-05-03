@@ -24,6 +24,11 @@ var upCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// CLI --provider flag overrides Machinefile provider field
+		if providerFlag != "" {
+			mf.Provider = providerFlag
+		}
+
 		fmt.Printf("🚀 Bringing up machine: %s (os: %s, image: %s)\n", mf.Name, mf.OS, mf.Image)
 
 		// 2. Select adapter based on provider/OS

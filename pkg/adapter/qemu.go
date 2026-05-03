@@ -814,3 +814,8 @@ func (q *QemuAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
 		CPUs:     mf.Resources.CPU,
 	}, nil
 }
+
+// Snapshot is not yet implemented for QEMU.
+func (q *QemuAdapter) Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error) {
+	return nil, ErrSnapshotUnsupported
+}

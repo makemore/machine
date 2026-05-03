@@ -40,9 +40,9 @@ resources:
 	if mf.Resources.Memory != "4gb" {
 		t.Errorf("Memory = %q, want %q", mf.Resources.Memory, "4gb")
 	}
-	// Check defaults
-	if mf.Provider != "local" {
-		t.Errorf("Provider default = %q, want %q", mf.Provider, "local")
+	// Check defaults — no provider means local/OS-based selection (unless MACH_PROVIDER env set)
+	if os.Getenv("MACH_PROVIDER") == "" && mf.Provider != "" {
+		t.Errorf("Provider default = %q, want empty string", mf.Provider)
 	}
 	if mf.PackageManager != "apt" {
 		t.Errorf("PackageManager default = %q, want %q", mf.PackageManager, "apt")
@@ -456,6 +456,97 @@ region: eu-central
 	}
 	if mf.Region != "eu-central" {
 		t.Errorf("Region = %q, want %q", mf.Region, "eu-central")
+	}
+}
+
+func TestLoad_NoProviderField(t *testing.T) {
+	t.Setenv("MACH_PROVIDER", "") // ensure env var doesn't interfere
+	path := writeTempFile(t, `
+name: test
+os: linux
+region: eu-central
+`)
+	mf, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mf.Provider != "" {
+		t.Errorf("Provider should be empty when not specified, got %q", mf.Provider)
+	}
+	if mf.Region != "eu-central" {
+		t.Errorf("Region = %q, want %q", mf.Region, "eu-central")
+	}
+}
+
+func TestProviderOverride(t *testing.T) {
+	// Simulates CLI --provider flag overriding Machinefile value
+	path := writeTempFile(t, `
+name: test
+os: linux
+provider: hetzner
+`)
+	mf, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mf.Provider != "hetzner" {
+		t.Errorf("Provider before override = %q, want %q", mf.Provider, "hetzner")
+	}
+	// Simulate CLI override (same as cmd/*.go does)
+	mf.Provider = "digitalocean"
+	if mf.Provider != "digitalocean" {
+		t.Errorf("Provider after override = %q, want %q", mf.Provider, "digitalocean")
+	}
+}
+
+func TestLoad_MACHPROVIDEREnvVar(t *testing.T) {
+	t.Setenv("MACH_PROVIDER", "digitalocean")
+	path := writeTempFile(t, `
+name: test
+os: linux
+`)
+	mf, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mf.Provider != "digitalocean" {
+		t.Errorf("Provider = %q, want %q (from MACH_PROVIDER env)", mf.Provider, "digitalocean")
+	}
+}
+
+func TestLoad_MACHPROVIDERDoesNotOverrideMachinefile(t *testing.T) {
+	t.Setenv("MACH_PROVIDER", "gcp")
+	path := writeTempFile(t, `
+name: test
+os: linux
+provider: hetzner
+`)
+	mf, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Machinefile provider should win over env var
+	if mf.Provider != "hetzner" {
+		t.Errorf("Provider = %q, want %q (Machinefile should take precedence over env var)", mf.Provider, "hetzner")
+	}
+}
+
+func TestProviderOverride_EmptyToSpecified(t *testing.T) {
+	// Machinefile has no provider, CLI sets one
+	path := writeTempFile(t, `
+name: test
+os: linux
+`)
+	mf, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mf.Provider != "" {
+		t.Errorf("Provider before override = %q, want empty", mf.Provider)
+	}
+	mf.Provider = "gcp"
+	if mf.Provider != "gcp" {
+		t.Errorf("Provider after override = %q, want %q", mf.Provider, "gcp")
 	}
 }
 

@@ -20,6 +20,11 @@ var downCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// CLI --provider flag overrides Machinefile provider field
+		if providerFlag != "" {
+			mf.Provider = providerFlag
+		}
+
 		fmt.Printf("⏹️  Stopping machine: %s\n", mf.Name)
 
 		ad, err := adapter.Select(mf)

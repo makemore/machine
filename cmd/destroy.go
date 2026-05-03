@@ -30,6 +30,11 @@ If no name is given, uses the Machinefile in the current directory.`,
 			os.Exit(1)
 		}
 
+		// CLI --provider flag overrides Machinefile provider field
+		if providerFlag != "" {
+			mf.Provider = providerFlag
+		}
+
 		fmt.Printf("🗑️  Destroying machine: %s\n", mf.Name)
 
 		ad, err := adapter.Select(mf)

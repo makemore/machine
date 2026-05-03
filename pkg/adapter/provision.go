@@ -48,6 +48,14 @@ func aptInstall(sudo, packages string) string {
 		waitForApt(sudo), sudo, sudo, packages)
 }
 
+// aptInstallNoUpdate returns a command to install packages via apt
+// without running `apt-get update` first. Use this when several installs
+// run back-to-back to avoid hitting the package mirrors repeatedly.
+func aptInstallNoUpdate(sudo, packages string) string {
+	return fmt.Sprintf("%s && %sDEBIAN_FRONTEND=noninteractive apt-get install -y %s",
+		waitForApt(sudo), sudo, packages)
+}
+
 // provisionCloud runs the full provisioning pipeline on a cloud VM via SSH
 func provisionCloud(mf *machinefile.Machinefile, user, ip string, useSudo bool) error {
 	run := &SSHRunner{User: user, IP: ip, KeyPath: sshPrivateKeyPath(mf.SSHKey)}
@@ -231,9 +239,15 @@ func provisionHarden(mf *machinefile.Machinefile, run CommandRunner, sudo string
 		return fmt.Errorf("SSH hardening: %w", err)
 	}
 
-	fmt.Printf("   🔒 Installing fail2ban...\n")
-	f2bCmd := aptInstall(sudo, "fail2ban")
-	f2bCmd += fmt.Sprintf(` && echo '[sshd]
+	// Install fail2ban + ufw + unattended-upgrades in a single apt transaction.
+	// Previously these were three serial `apt-get update + install` runs.
+	fmt.Printf("   🔒 Installing fail2ban + ufw + unattended-upgrades...\n")
+	if err := run.Exec(aptInstall(sudo, "fail2ban ufw unattended-upgrades")); err != nil {
+		return fmt.Errorf("installing harden packages: %w", err)
+	}
+
+	fmt.Printf("   🔒 Configuring fail2ban...\n")
+	f2bCfg := fmt.Sprintf(`echo '[sshd]
 enabled = true
 port = ssh
 filter = sshd
@@ -241,13 +255,12 @@ logpath = /var/log/auth.log
 maxretry = 3
 bantime = 86400
 findtime = 600' | %stee /etc/fail2ban/jail.local > /dev/null && %ssystemctl enable fail2ban && %ssystemctl restart fail2ban`, sudo, sudo, sudo)
-	if err := run.Exec(f2bCmd); err != nil {
+	if err := run.Exec(f2bCfg); err != nil {
 		return fmt.Errorf("fail2ban: %w", err)
 	}
 
 	fmt.Printf("   🔒 Configuring UFW...\n")
-	ufwCmd := aptInstall(sudo, "ufw")
-	ufwCmd += fmt.Sprintf(" && %sufw default deny incoming && %sufw default allow outgoing && %sufw allow 22/tcp", sudo, sudo, sudo)
+	ufwCmd := fmt.Sprintf("%sufw default deny incoming && %sufw default allow outgoing && %sufw allow 22/tcp", sudo, sudo, sudo)
 	for _, port := range mf.Expose {
 		ufwCmd += fmt.Sprintf(" && %sufw allow %d/tcp", sudo, port)
 	}
@@ -257,10 +270,9 @@ findtime = 600' | %stee /etc/fail2ban/jail.local > /dev/null && %ssystemctl enab
 	}
 
 	fmt.Printf("   🔒 Enabling unattended upgrades...\n")
-	upgradeCmd := aptInstall(sudo, "unattended-upgrades")
-	upgradeCmd += fmt.Sprintf(` && echo 'APT::Periodic::Update-Package-Lists "1";
+	upgradeCfg := fmt.Sprintf(`echo 'APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";' | %stee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null`, sudo)
-	if err := run.Exec(upgradeCmd); err != nil {
+	if err := run.Exec(upgradeCfg); err != nil {
 		return fmt.Errorf("unattended upgrades: %w", err)
 	}
 

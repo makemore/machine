@@ -281,3 +281,8 @@ func (t *TartAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
 		CPUs:     mf.Resources.CPU,
 	}, nil
 }
+
+// Snapshot is not yet implemented for Tart.
+func (t *TartAdapter) Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error) {
+	return nil, ErrSnapshotUnsupported
+}

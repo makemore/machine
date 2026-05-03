@@ -132,8 +132,12 @@ func Load(path string) (*Machinefile, error) {
 	if mf.PackageManager == "" {
 		mf.PackageManager = "apt"
 	}
+	// Default to local OS-based adapter when no provider specified.
+	// CLI --provider flag and MACH_PROVIDER env var can override.
 	if mf.Provider == "" {
-		mf.Provider = "local"
+		if envProvider := os.Getenv("MACH_PROVIDER"); envProvider != "" {
+			mf.Provider = envProvider
+		}
 	}
 	if mf.SSHKey == "" {
 		home, _ := os.UserHomeDir()

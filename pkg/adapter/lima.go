@@ -274,3 +274,8 @@ func (l *LimaAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
 		CPUs:     cpus,
 	}, nil
 }
+
+// Snapshot is not yet implemented for Lima.
+func (l *LimaAdapter) Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error) {
+	return nil, ErrSnapshotUnsupported
+}

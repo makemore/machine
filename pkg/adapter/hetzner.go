@@ -602,4 +602,114 @@ func (h *HetznerAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error)
 	}, nil
 }
 
+// Snapshot creates a Hetzner Cloud image (snapshot) from the running server.
+// Uses POST /servers/{id}/actions/create_image. The returned image id can
+// later be used as a Machinefile `image:` value to skip provisioning.
+func (h *HetznerAdapter) Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error) {
+	_, serverID, err := h.getServerIP(mf.Name)
+	if err != nil {
+		return nil, fmt.Errorf("locating server '%s': %w", mf.Name, err)
+	}
+
+	desc := label
+	if desc == "" {
+		desc = fmt.Sprintf("mach snapshot of %s", mf.Name)
+	}
+
+	body := map[string]interface{}{
+		"description": desc,
+		"type":        "snapshot",
+		"labels": map[string]string{
+			"mach":    "true",
+			"machine": mf.Name,
+		},
+	}
+	resp, status, err := h.hetznerRequest("POST", fmt.Sprintf("/servers/%d/actions/create_image", serverID), body)
+	if err != nil {
+		return nil, err
+	}
+	if status != 201 {
+		return nil, fmt.Errorf("creating image: HTTP %d: %s", status, string(resp))
+	}
+
+	var actionResult struct {
+		Image struct {
+			ID          int64  `json:"id"`
+			Description string `json:"description"`
+			ImageSize   float64 `json:"image_size"`
+			DiskSize    float64 `json:"disk_size"`
+			Created     string `json:"created"`
+		} `json:"image"`
+		Action struct {
+			ID       int64  `json:"id"`
+			Status   string `json:"status"`
+			Progress int    `json:"progress"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(resp, &actionResult); err != nil {
+		return nil, fmt.Errorf("parsing image response: %w", err)
+	}
+
+	imageID := actionResult.Image.ID
+	actionID := actionResult.Action.ID
+	fmt.Printf("   📸 Snapshot started (image: %d, action: %d)\n", imageID, actionID)
+
+	// Poll the action until success/error (snapshots can take a few minutes).
+	deadline := time.Now().Add(15 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Second)
+		ar, st, err := h.hetznerRequest("GET", fmt.Sprintf("/actions/%d", actionID), nil)
+		if err != nil || st != 200 {
+			continue
+		}
+		var poll struct {
+			Action struct {
+				Status   string `json:"status"`
+				Progress int    `json:"progress"`
+			} `json:"action"`
+		}
+		if json.Unmarshal(ar, &poll) != nil {
+			continue
+		}
+		fmt.Printf("   📸 Snapshot progress: %d%% (%s)\n", poll.Action.Progress, poll.Action.Status)
+		switch poll.Action.Status {
+		case "success":
+			return h.snapshotInfo(imageID)
+		case "error":
+			return nil, fmt.Errorf("snapshot action %d failed", actionID)
+		}
+	}
+	return nil, fmt.Errorf("snapshot action %d timed out after 15m", actionID)
+}
+
+// snapshotInfo fetches metadata for a finished image and returns a SnapshotInfo.
+func (h *HetznerAdapter) snapshotInfo(imageID int64) (*SnapshotInfo, error) {
+	resp, status, err := h.hetznerRequest("GET", fmt.Sprintf("/images/%d", imageID), nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("fetching image %d: HTTP %d: %s", imageID, status, string(resp))
+	}
+	var result struct {
+		Image struct {
+			ID          int64   `json:"id"`
+			Description string  `json:"description"`
+			DiskSize    float64 `json:"disk_size"`
+			Created     string  `json:"created"`
+		} `json:"image"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+	return &SnapshotInfo{
+		ID:          fmt.Sprintf("%d", result.Image.ID),
+		Name:        result.Image.Description,
+		Description: result.Image.Description,
+		Provider:    "hetzner",
+		SizeGB:      int(result.Image.DiskSize),
+		CreatedAt:   result.Image.Created,
+	}, nil
+}
+
 // parseMemoryMB is defined in tart.go (shared across adapters)

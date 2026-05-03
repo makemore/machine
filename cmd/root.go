@@ -11,6 +11,7 @@ import (
 var machineFile string
 var jsonOutput bool
 var stateFile string
+var providerFlag string
 
 var rootCmd = &cobra.Command{
 	Use:   "mach",
@@ -36,6 +37,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&machineFile, "file", "f", "Machinefile", "Path to Machinefile")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output machine-readable JSON")
 	rootCmd.PersistentFlags().StringVar(&stateFile, "state-file", "", "Path to state file (default: ~/.config/machine/state/<name>.json)")
+	rootCmd.PersistentFlags().StringVar(&providerFlag, "provider", "", "Cloud provider to use (e.g. digitalocean, hetzner, gcp, lima). Overrides Machinefile provider.")
 
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -43,4 +45,5 @@ func init() {
 	rootCmd.AddCommand(sshCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(snapshotCmd)
 }
