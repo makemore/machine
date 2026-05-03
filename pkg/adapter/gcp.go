@@ -329,3 +329,8 @@ func (g *GCPAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, error) {
 		OS:       mf.OS,
 	}, nil
 }
+
+// Snapshot is not yet implemented for GCP.
+func (g *GCPAdapter) Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error) {
+	return nil, ErrSnapshotUnsupported
+}

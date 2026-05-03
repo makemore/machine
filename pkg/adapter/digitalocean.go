@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -144,7 +146,10 @@ func (d *DigitalOceanAdapter) uploadDOSSHKey(keyName, pubKey string) (string, er
 		return keyResult.SSHKey.Fingerprint, nil
 	}
 
-	// Key might already exist — list and find by name
+	// Key already exists (422 "already in use") — find by name or fingerprint.
+	// DO returns 422 when the public key content already exists on the account,
+	// possibly under a different name from a previous provisioning run.
+	fp := sshKeyFingerprint(pubKey)
 	listResp, _, err := d.doRequest("GET", "/account/keys?per_page=200", nil)
 	if err != nil {
 		return "", err
@@ -159,11 +164,30 @@ func (d *DigitalOceanAdapter) uploadDOSSHKey(keyName, pubKey string) (string, er
 		return "", err
 	}
 	for _, k := range listResult.SSHKeys {
-		if k.Name == keyName {
+		if k.Name == keyName || (fp != "" && k.Fingerprint == fp) {
 			return k.Fingerprint, nil
 		}
 	}
 	return "", fmt.Errorf("failed to create or find SSH key '%s': HTTP %d: %s", keyName, status, string(createResp))
+}
+
+// sshKeyFingerprint computes the MD5 fingerprint of an SSH public key
+// in the colon-separated format used by DigitalOcean (e.g. "ab:cd:ef:...").
+func sshKeyFingerprint(pubKey string) string {
+	parts := strings.Fields(strings.TrimSpace(pubKey))
+	if len(parts) < 2 {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	hash := md5.Sum(decoded)
+	segments := make([]string, len(hash))
+	for i, b := range hash {
+		segments[i] = fmt.Sprintf("%02x", b)
+	}
+	return strings.Join(segments, ":")
 }
 
 // getSSHKeyFingerprints uploads all SSH keys and returns fingerprints
@@ -548,4 +572,9 @@ func (d *DigitalOceanAdapter) Info(mf *machinefile.Machinefile) (*MachineInfo, e
 		Region:   mf.Region,
 		OS:       mf.OS,
 	}, nil
+}
+
+// Snapshot is not yet implemented for DigitalOcean.
+func (d *DigitalOceanAdapter) Snapshot(mf *machinefile.Machinefile, label string) (*SnapshotInfo, error) {
+	return nil, ErrSnapshotUnsupported
 }

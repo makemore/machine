@@ -175,9 +175,10 @@ func TestProvisionHarden_Enabled(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-	// Should run: SSH hardening, fail2ban, UFW, unattended-upgrades = 4 commands
-	if len(run.commands) != 4 {
-		t.Errorf("expected 4 commands, got %d", len(run.commands))
+	// Should run: SSH hardening, combined apt install (fail2ban+ufw+unattended-upgrades),
+	// fail2ban config, UFW config, unattended-upgrades config = 5 commands
+	if len(run.commands) != 5 {
+		t.Errorf("expected 5 commands, got %d", len(run.commands))
 	}
 }
 
