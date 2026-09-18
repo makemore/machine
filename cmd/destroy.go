@@ -57,7 +57,7 @@ func destroyByName(name string) {
 
 	// Scan all adapters (same as `mach list`) to find which one owns this machine
 	var found *listEntry
-	for _, scanFn := range []func() []listEntry{listLimaVMs, listTartVMs, listQemuVMs, listHetznerVMs, listDigitalOceanVMs} {
+	for _, scanFn := range []func() []listEntry{listLimaVMs, listTartVMs, listQemuVMs, listHetznerVMs, listDigitalOceanVMs, listHostingerVMs} {
 		for _, e := range scanFn() {
 			if e.Name == name {
 				entry := e
@@ -85,6 +85,9 @@ func destroyByName(name string) {
 	case "do":
 		mf.OS = "linux"
 		mf.Provider = "digitalocean"
+	case "hostinger":
+		mf.OS = "linux"
+		mf.Provider = "hostinger"
 	}
 
 	ad, err := adapter.Select(mf)
@@ -104,4 +107,3 @@ func destroyByName(name string) {
 
 	fmt.Printf("✅ Machine '%s' destroyed\n", name)
 }
-

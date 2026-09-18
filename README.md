@@ -9,6 +9,7 @@ mach -f Machinefile.windows up       # local Windows VM (QEMU)
 mach -f Machinefile.hetzner up       # Hetzner Cloud server
 mach -f Machinefile.do up            # DigitalOcean droplet
 mach -f Machinefile.gcp up           # Google Cloud instance
+mach -f Machinefile.hostinger up     # Hostinger VPS
 ```
 
 ## Install
@@ -38,7 +39,7 @@ A `Machinefile` is a YAML file that describes a machine — OS, resources, packa
 ```yaml
 name: my-app
 os: linux
-provider: hetzner          # local (default), hetzner, digitalocean, gcp
+provider: hetzner          # local (default), hetzner, digitalocean, gcp, hostinger
 region: eu-central         # friendly names mapped to provider slugs
 harden: true               # SSH lockdown, fail2ban, UFW, unattended-upgrades
 swap: 4gb                  # provision swap space
@@ -237,16 +238,17 @@ Installs Caddy from official repo, generates Caddyfile, auto-TLS.
 | Hetzner | `hetzner` | `HETZNER_API_TOKEN` | cax11–cax41 (ARM, from €3.29/mo) |
 | DigitalOcean | `digitalocean` | `DIGITALOCEAN_TOKEN` | s-1vcpu-1gb to s-8vcpu-16gb |
 | GCP | `gcp` | `gcloud auth login` | t2a-standard-1 to t2a-standard-8 (ARM) |
+| Hostinger | `hostinger` | `HOSTINGER_API_TOKEN` | KVM plans via catalog `item_id` |
 
 ### Regions
 
-| Region | Hetzner | DigitalOcean | GCP |
-|---|---|---|---|
-| `eu-central` | fsn1 (Falkenstein) | fra1 (Frankfurt) | europe-west3-a |
-| `eu-west` | hel1 (Helsinki) | ams3 (Amsterdam) | europe-west1-b |
-| `london` / `uk` | — | lon1 | europe-west2-a |
-| `us` / `us-east` | ash (Ashburn) | nyc3 | us-central1-a |
-| `us-west` | hil (Hillsboro) | sfo3 | us-west1-a |
+| Region | Hetzner | DigitalOcean | GCP | Hostinger |
+|---|---|---|---|---|
+| `eu-central` | fsn1 (Falkenstein) | fra1 (Frankfurt) | europe-west3-a | Europe match |
+| `eu-west` | hel1 (Helsinki) | ams3 (Amsterdam) | europe-west1-b | Europe match |
+| `london` / `uk` | — | lon1 | europe-west2-a | Europe match |
+| `us` / `us-east` | ash (Ashburn) | nyc3 | us-central1-a | US match |
+| `us-west` | hil (Hillsboro) | sfo3 | us-west1-a | US match |
 
 ## API Keys
 
@@ -255,9 +257,22 @@ Create a `.env` file in your project root (automatically gitignored):
 ```
 HETZNER_API_TOKEN=your-token-here
 DIGITALOCEAN_TOKEN=your-token-here
+HOSTINGER_API_TOKEN=your-token-here
 ```
 
 GCP uses `gcloud auth login`. `.env` is loaded automatically.
+
+Hostinger VM creation can also use these optional overrides:
+
+```
+HOSTINGER_VPS_ITEM_ID=hostingercom-vps-kvm2-usd-1m
+HOSTINGER_DATA_CENTER_ID=19
+HOSTINGER_TEMPLATE_ID=1130
+HOSTINGER_PAYMENT_METHOD_ID=123456
+HOSTINGER_ENABLE_BACKUPS=false
+```
+
+If `HOSTINGER_VPS_ITEM_ID` is omitted, `memory: 8gb` maps to KVM 2.
 
 ## Architecture
 

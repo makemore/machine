@@ -1,0 +1,39 @@
+name: team-dev
+
+os: linux
+provider: hostinger
+region: eu-west
+image: ubuntu
+harden: true
+swap: 4gb
+
+resources:
+  cpu: 2
+  memory: 8gb
+  disk: 100gb
+
+users:
+  - username: dev
+    public_key: "ssh-ed25519 REPLACE_ME dev@laptop"
+    sudo: true
+    shell: /bin/bash
+
+setup:
+  - install: git curl wget unzip jq build-essential tmux htop zsh python3 python3-venv python3-pip
+  - install: docker
+  - install: nodejs-22
+  - cmd: npm install -g @anthropic-ai/claude-code @augmentcode/auggie @openai/codex || true
+
+run:
+  - cmd: uname -a
+
+expose:
+  - 80
+  - 443
+  - 3000
+  - 8000
+  - 8080
+
+motd: |
+  Hostinger 8GB dev VM: {{.Name}}
+  IP: {{.IP}}

@@ -12,6 +12,8 @@ func Select(mf *machinefile.Machinefile) (Adapter, error) {
 	switch mf.Provider {
 	case "hetzner":
 		return NewHetznerAdapter(), nil
+	case "hostinger":
+		return NewHostingerAdapter(), nil
 	case "digitalocean", "do":
 		return NewDigitalOceanAdapter(), nil
 	case "gcp", "google":

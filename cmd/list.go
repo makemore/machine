@@ -42,6 +42,8 @@ var listCmd = &cobra.Command{
 		entries = append(entries, listHetznerVMs()...)
 		// DigitalOcean
 		entries = append(entries, listDigitalOceanVMs()...)
+		// Hostinger VPS
+		entries = append(entries, listHostingerVMs()...)
 
 		if len(entries) == 0 {
 			if jsonOutput {
@@ -312,6 +314,54 @@ func listDigitalOceanVMs() []listEntry {
 			CPUs:   strconv.Itoa(d.Size.VCPUs),
 			Memory: fmt.Sprintf("%d MB", d.Size.Memory),
 			Disk:   fmt.Sprintf("%d GB", d.Size.Disk),
+		})
+	}
+	return entries
+}
+
+func listHostingerVMs() []listEntry {
+	var entries []listEntry
+	token := os.Getenv("HOSTINGER_API_TOKEN")
+	if token == "" {
+		return entries
+	}
+	req, _ := http.NewRequest("GET", "https://developers.hostinger.com/api/vps/v1/virtual-machines", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return entries
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var vms []struct {
+		Hostname string `json:"hostname"`
+		State    string `json:"state"`
+		CPUs     int    `json:"cpus"`
+		Memory   int    `json:"memory"`
+		Disk     int    `json:"disk"`
+	}
+	if json.Unmarshal(body, &vms) != nil {
+		return entries
+	}
+	for _, vm := range vms {
+		icon := "⚪"
+		switch vm.State {
+		case "running":
+			icon = "🟢"
+		case "stopped":
+			icon = "🔴"
+		case "creating", "starting", "initial":
+			icon = "🟡"
+		}
+		entries = append(entries, listEntry{
+			Icon:   icon,
+			Name:   vm.Hostname,
+			Status: vm.State,
+			OS:     "hostinger",
+			CPUs:   strconv.Itoa(vm.CPUs),
+			Memory: fmt.Sprintf("%d MB", vm.Memory),
+			Disk:   fmt.Sprintf("%d GB", vm.Disk/1024),
 		})
 	}
 	return entries
